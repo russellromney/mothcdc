@@ -32,7 +32,11 @@ unsafe fn avx512_impl<const SHOULD_HASH: bool>(
                 offset = bytes.len() - 64 - 3;
             }
 
-            _mm_prefetch::<_MM_HINT_T0>(bytes.as_ptr().add(offset + PREFETCH_DIST).cast());
+            // wrapping_add: offset + PREFETCH_DIST routinely lands past the end
+            // of the search slice. The address is only ever fed to _mm_prefetch
+            // (which faults silently), but `ptr::add` past the allocation is UB
+            // in Rust even without a deref, so use wrapping_add to stay sound.
+            _mm_prefetch::<_MM_HINT_T0>(bytes.as_ptr().wrapping_add(offset + PREFETCH_DIST).cast());
 
             let mut v0 = _mm512_loadu_si512(bytes.as_ptr().add(offset).cast());
             let mut v1 = _mm512_loadu_si512(bytes.as_ptr().add(offset + 1).cast());
@@ -136,7 +140,9 @@ unsafe fn avx2_impl<const SHOULD_HASH: bool>(bytes: &[u8], multiplier: u32, adde
 
     unsafe {
         while offset + 64 + 4 <= bytes.len() {
-            _mm_prefetch::<_MM_HINT_T0>(bytes.as_ptr().add(offset + PREFETCH_DIST).cast());
+            // See note in avx512_impl: wrapping_add keeps the OOB prefetch
+            // address computation sound.
+            _mm_prefetch::<_MM_HINT_T0>(bytes.as_ptr().wrapping_add(offset + PREFETCH_DIST).cast());
 
             // Manually unrolled twice.
             body(&mut offset);
@@ -220,7 +226,9 @@ fn sse41_impl<const SHOULD_HASH: bool>(bytes: &[u8], multiplier: u32, addend: u3
 
     unsafe {
         while offset + 32 + 4 <= bytes.len() {
-            _mm_prefetch::<_MM_HINT_T0>(bytes.as_ptr().add(offset + PREFETCH_DIST).cast());
+            // See note in avx512_impl: wrapping_add keeps the OOB prefetch
+            // address computation sound.
+            _mm_prefetch::<_MM_HINT_T0>(bytes.as_ptr().wrapping_add(offset + PREFETCH_DIST).cast());
 
             // Manually unrolled twice.
             body(&mut offset);
