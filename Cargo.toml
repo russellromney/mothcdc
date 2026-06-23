@@ -16,5 +16,6 @@ exclude = ["assets", "tools"]
 rand = "0.9.2"
 fastcdc = "3.2.1"
 foldhash = "0.2.0"
+proptest = "1"
 
 [dependencies]
