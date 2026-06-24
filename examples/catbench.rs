@@ -117,9 +117,9 @@ fn main() {
                 }
                 Some(f) => {
                     let it = if f {
-                        CaterpillarChunker::new(b, MIN, MAX, cdc)
+                        CaterpillarChunker::new(b, MIN, MAX, cdc).with_period_detection(usize::MAX)
                     } else {
-                        CaterpillarChunker::simple(b, MIN, MAX, cdc)
+                        CaterpillarChunker::new(b, MIN, MAX, cdc)
                     };
                     for s in it {
                         let k = match s {
@@ -160,9 +160,9 @@ fn main() {
             let mut s = 0usize;
             for b in &blobs {
                 let it = if full {
-                    CaterpillarChunker::new(b, MIN, MAX, cdc)
+                    CaterpillarChunker::new(b, MIN, MAX, cdc).with_period_detection(usize::MAX)
                 } else {
-                    CaterpillarChunker::simple(b, MIN, MAX, cdc)
+                    CaterpillarChunker::new(b, MIN, MAX, cdc)
                 };
                 for seg in it {
                     s ^= seg.offset();

@@ -1,36 +1,40 @@
 //! Caterpillar coalescing — a metadata-efficiency layer over the chunkers.
 //!
-//! PROTOTYPE (not upstream). Inspired by the "caterpillar" idea in the Chonkers
-//! algorithm (Berger, 2025): periodic / low-entropy regions make any CDC emit a
-//! flood of tiny, near-`min_size` chunks. Each chunk is a separate metadata
-//! record (e.g. one `extent_chunks` row), so a long zero-fill or repeated-record
-//! region costs metadata out of all proportion to its information content.
+//! Inspired by the "caterpillar" idea in the Chonkers algorithm (Berger, 2025):
+//! periodic / low-entropy regions make any CDC emit a flood of tiny,
+//! near-`min_size` chunks. Each chunk is a separate metadata record, so a long
+//! zero-fill or repeated-record region costs metadata out of all proportion to
+//! its information content.
 //!
-//! This layer wraps a [`SliceChunker`] and coalesces such regions in two tiers:
+//! [`CaterpillarChunker`] wraps a [`SliceChunker`] and run-length-encodes
+//! maximal runs of byte-identical adjacent chunks into a single
+//! [`Segment::Caterpillar`] record (the unit + a repeat count). It catches
+//! zero-fill, constant bytes, and repeated blocks; it is a no-op (one slice
+//! compare per chunk) on data with no runs, so it keeps mincdc's speed and
+//! deduplication everywhere else. The output is lossless.
 //!
-//!  - **Tier 1 (always on, free):** run-length-encode maximal runs of
-//!    byte-identical adjacent chunks into a [`Segment::Caterpillar`]. Catches
-//!    zero-fill, constant bytes, and exact repeats whose period divides the
-//!    chunk length. One slice compare per chunk; a no-op on generic data.
+//! # Example
+//! ```
+//! use mincatcdc::{MinCdcHash4, caterpillar::{CaterpillarChunker, Segment}};
 //!
-//!  - **Tier 2 (gated fallback):** when tier 1 does not fire, cheaply probe the
-//!    chunk for a repeating period `P` (the prefix-recurrence gate below). If the
-//!    chunk is `P`-periodic, extend the run over following chunks while the
-//!    period holds and emit a [`Segment::Periodic`]. This catches the
-//!    *phase-rotating* case — periodic data where `chunk_len % P != 0`, so
-//!    consecutive chunks are rotations of the same period and tier 1 cannot see
-//!    them as equal.
+//! let data = vec![0u8; 64 * 2048]; // a long zero run
+//! let segs: Vec<_> = CaterpillarChunker::new(&data, 2048, 14336, MinCdcHash4::new()).collect();
 //!
-//! ## Keeping tier 2 honest
-//!  - **Gate:** the period probe scans for the recurrence of the chunk's 16-byte
-//!    prefix. On random data the prefix does not recur, so it rejects after a
-//!    bounded scan (capped at [`MAX_PERIOD`]); false positives are ~`2^-64`.
-//!  - **Budget:** a byte budget bounds total detection work so adversarial
-//!    "near-periodic" input cannot drag throughput down to the probe's speed.
-//!  - **Dedup identity:** the stored period cell is canonicalized to its least
-//!    rotation (Booth's algorithm) so the *same* periodic content deduplicates
-//!    regardless of the phase at which the run happened to start. The Chonkers
-//!    paper flags this exact shift-dependence hazard.
+//! // The whole zero run collapses into one record instead of ~64 chunks.
+//! assert_eq!(segs.len(), 1);
+//! assert!(matches!(segs[0], Segment::Caterpillar { .. }));
+//! // `dedup_key()` gives the unique bytes to fingerprint/store, regardless of variant.
+//! assert!(segs[0].dedup_key().iter().all(|&b| b == 0));
+//! ```
+//!
+//! ## Experimental: period detection
+//! [`CaterpillarChunker::with_period_detection`] additionally catches
+//! *phase-rotating* periodic runs (consecutive chunks that are rotations of the
+//! same period, which the default cannot see as equal). It is usually not worth
+//! it — it adds a large per-chunk cost and mincdc already self-aligns to most
+//! periods — so it is opt-in. The detected period cell is canonicalized to its
+//! least rotation (Booth's algorithm) so the same periodic content dedups
+//! regardless of phase. See `examples/CATBENCH_RESULTS.md`.
 
 use crate::{Cdc, Chunk, SliceChunker};
 
@@ -102,6 +106,19 @@ impl<'a> Segment<'a> {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// The unique content to fingerprint/store for content addressing: the chunk
+    /// bytes for [`Segment::Solo`], the repeated unit for [`Segment::Caterpillar`],
+    /// or the canonical (phase-independent) period for [`Segment::Periodic`].
+    /// Hash this; store it once; use [`offset`](Self::offset),
+    /// [`len`](Self::len), and [`chunk_count`](Self::chunk_count) for the record.
+    pub fn dedup_key(&self) -> &[u8] {
+        match self {
+            Segment::Solo(c) => &**c,
+            Segment::Caterpillar { unit, .. } => unit,
+            Segment::Periodic { canonical, .. } => canonical,
+        }
+    }
 }
 
 /// Wraps a [`SliceChunker`] and coalesces periodic / repeated regions.
@@ -114,43 +131,33 @@ pub struct CaterpillarChunker<'a, C> {
 }
 
 impl<'a, C: Cdc> CaterpillarChunker<'a, C> {
-    /// Full caterpillar: tier 1 + tier 2 period detection, unbounded budget.
+    /// Creates a caterpillar chunker (run-length-encodes byte-identical adjacent
+    /// chunks). This is the recommended default: free on data with no runs, and
+    /// it collapses zero-fill, padding, and repeated blocks into single records.
     pub fn new(bytes: &'a [u8], min_size: usize, max_size: usize, cdc: C) -> Self {
-        Self::configured(bytes, min_size, max_size, cdc, true, usize::MAX)
-    }
-
-    /// Tier 1 only (byte-identical RLE) — the simple caterpillar, for comparison.
-    pub fn simple(bytes: &'a [u8], min_size: usize, max_size: usize, cdc: C) -> Self {
-        Self::configured(bytes, min_size, max_size, cdc, false, 0)
-    }
-
-    /// Full caterpillar with an explicit detection byte budget (floors the
-    /// adversarial worst case).
-    pub fn with_budget(
-        bytes: &'a [u8],
-        min_size: usize,
-        max_size: usize,
-        cdc: C,
-        period_budget: usize,
-    ) -> Self {
-        Self::configured(bytes, min_size, max_size, cdc, true, period_budget)
-    }
-
-    fn configured(
-        bytes: &'a [u8],
-        min_size: usize,
-        max_size: usize,
-        cdc: C,
-        enable_period: bool,
-        period_budget: usize,
-    ) -> Self {
         Self {
             data: bytes,
             inner: SliceChunker::new(bytes, min_size, max_size, cdc),
             carry: None,
-            enable_period,
-            period_budget,
+            enable_period: false,
+            period_budget: 0,
         }
+    }
+
+    /// EXPERIMENTAL — additionally enable period detection, which catches
+    /// *phase-rotating* periodic runs that the default cannot (consecutive chunks
+    /// that are rotations of the same period).
+    ///
+    /// This is usually **not** worth enabling: it adds a large per-chunk cost,
+    /// and because mincdc self-aligns chunk boundaries to periods, the default
+    /// already handles most periodic data. It only helps with narrow
+    /// `[min, max]` windows where no period multiple fits. `budget` bounds total
+    /// detection work in bytes (use `usize::MAX` for unlimited). See
+    /// `examples/CATBENCH_RESULTS.md` for measurements.
+    pub fn with_period_detection(mut self, budget: usize) -> Self {
+        self.enable_period = true;
+        self.period_budget = budget;
+        self
     }
 
     /// Tier-2 gate + detector. Returns the smallest detected period `P` of the
@@ -333,9 +340,9 @@ mod tests {
         let plain = SliceChunker::new(data, min, max, cdc).count();
 
         let chunker = if full {
-            CaterpillarChunker::new(data, min, max, cdc)
+            CaterpillarChunker::new(data, min, max, cdc).with_period_detection(usize::MAX)
         } else {
-            CaterpillarChunker::simple(data, min, max, cdc)
+            CaterpillarChunker::new(data, min, max, cdc)
         };
 
         let mut records = 0usize;
@@ -462,8 +469,12 @@ mod tests {
         // collapse it, and only when the budget allows detection.
         let (min, max) = (2048usize, 2200usize);
         let plain_narrow = SliceChunker::new(&data, min, max, cdc).count();
-        let starved = CaterpillarChunker::with_budget(&data, min, max, cdc, 0).count();
-        let fed = CaterpillarChunker::with_budget(&data, min, max, cdc, usize::MAX).count();
+        let starved = CaterpillarChunker::new(&data, min, max, cdc)
+            .with_period_detection(0)
+            .count();
+        let fed = CaterpillarChunker::new(&data, min, max, cdc)
+            .with_period_detection(usize::MAX)
+            .count();
 
         assert!(
             starved as f64 > plain_narrow as f64 * 0.9,

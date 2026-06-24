@@ -167,9 +167,9 @@ fn main() {
         let mut sink = 0usize;
         for b in &blobs {
             let it = if full {
-                CaterpillarChunker::new(b, MIN, MC_MAX, cdc)
+                CaterpillarChunker::new(b, MIN, MC_MAX, cdc).with_period_detection(usize::MAX)
             } else {
-                CaterpillarChunker::simple(b, MIN, MC_MAX, cdc)
+                CaterpillarChunker::new(b, MIN, MC_MAX, cdc)
             };
             for s in it {
                 sink ^= s.offset();
@@ -179,9 +179,9 @@ fn main() {
         std::hint::black_box(sink);
         for b in &blobs {
             let it = if full {
-                CaterpillarChunker::new(b, MIN, MC_MAX, cdc)
+                CaterpillarChunker::new(b, MIN, MC_MAX, cdc).with_period_detection(usize::MAX)
             } else {
-                CaterpillarChunker::simple(b, MIN, MC_MAX, cdc)
+                CaterpillarChunker::new(b, MIN, MC_MAX, cdc)
             };
             for s in it {
                 match s {

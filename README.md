@@ -47,6 +47,29 @@ on redundant data without writing any domain-specific preprocessing (zero
 detection, sparse reads, etc.). See `examples/CATBENCH_RESULTS.md` and
 `examples/REALBENCH_RESULTS.md` for measurements on real corpora.
 
+### Using the caterpillar
+
+It's a drop-in over the byte-slice chunker — iterate `Segment`s instead of
+`Chunk`s:
+
+```rust
+use mincatcdc::{CaterpillarChunker, MinCdcHash4};
+
+for seg in CaterpillarChunker::new(&data, 2048, 14336, MinCdcHash4::new()) {
+    // Store the unique content once. `dedup_key()` returns the bytes to
+    // fingerprint regardless of variant (a chunk, a repeated unit, or a period).
+    store(hash(seg.dedup_key()), seg.dedup_key());
+    // Record where it goes: offset, total byte length, and how many underlying
+    // chunks this one record stands for.
+    record(seg.offset(), seg.len(), seg.chunk_count());
+}
+```
+
+`CaterpillarChunker::new` is the recommended default. There is also an
+experimental `.with_period_detection(budget)` that catches phase-rotating
+periodic runs the default can't, but it is usually not worth its cost — see
+`examples/CATBENCH_RESULTS.md`.
+
 To get the disk-image number, two 200 MiB APFS images were created
 with `hdiutil` (`hdiutil create -size 200m -fs APFS ...`), each holding a real
 source tree (the second also holds an extra version), so each image is ~92%

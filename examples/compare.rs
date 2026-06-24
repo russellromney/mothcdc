@@ -140,9 +140,9 @@ fn run_caterpillar(data: &[u8], min: usize, max: usize, full: bool, d: &mut Dedu
     let cdc = MinCdcHash4::new();
     let make = |full: bool| {
         if full {
-            CaterpillarChunker::new(data, min, max, cdc)
+            CaterpillarChunker::new(data, min, max, cdc).with_period_detection(usize::MAX)
         } else {
-            CaterpillarChunker::simple(data, min, max, cdc)
+            CaterpillarChunker::new(data, min, max, cdc)
         }
     };
     let (gbps, records) = bench(data.len(), || {
@@ -207,7 +207,7 @@ fn scenario_versioned(min: usize, avg: usize, max: usize) {
     // mincdc + cat-period
     let mut d = Dedup::new();
     for data in [&v1[..], &v2[..]] {
-        for s in CaterpillarChunker::new(data, min, max, cdc) {
+        for s in CaterpillarChunker::new(data, min, max, cdc).with_period_detection(usize::MAX) {
             match s {
                 Segment::Solo(c) => d.add(fnv1a(&c), c.len(), c.len()),
                 Segment::Caterpillar { unit, count, .. } => d.add(fnv1a(unit), unit.len(), unit.len() * count),
