@@ -1,4 +1,11 @@
 Copyright (c) 2025 Orson Peters
+Modifications copyright (c) 2026 Russell Romney
+
+This is "mincatcdc", an altered version of the original MinCDC software by Orson
+Peters (https://github.com/orlp/mincdc). It is not the original software: the
+fork adds a caterpillar coalescing layer, a SIMD prefetch soundness fix, and
+additional tests. These modifications are released under the same Zlib license
+below.
 
 This software is provided 'as-is', without any express or implied warranty. In
 no event will the authors be held liable for any damages arising from the use of

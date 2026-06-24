@@ -17,8 +17,8 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use fastcdc::v2020::FastCDC;
-use mincdc::caterpillar::{CaterpillarChunker, Segment};
-use mincdc::{MinCdcHash4, SliceChunker};
+use mincatcdc::caterpillar::{CaterpillarChunker, Segment};
+use mincatcdc::{MinCdcHash4, SliceChunker};
 
 const MIN: usize = 2048;
 const AVG: usize = 8192;

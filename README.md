@@ -1,4 +1,9 @@
-# MinCDC
+# mincatcdc
+
+> A fork of [MinCDC](https://github.com/orlp/mincdc) that adds a *caterpillar*
+> layer for metadata-efficient content-defined chunking on redundant data. The
+> algorithm described below is MinCDC; see [This fork](#this-fork-mincatcdc) for
+> what's added and why.
 
 MinCDC is a very simple yet efficient content-defined chunking algorithm. It
 splits your input data into chunks in such a way that the boundaries are defined
@@ -42,6 +47,16 @@ on top of mincdc rather than adopting the whole (heavier) Chonkers machinery.
 on redundant data without writing any domain-specific preprocessing (zero
 detection, sparse reads, etc.). See `examples/CATBENCH_RESULTS.md` and
 `examples/REALBENCH_RESULTS.md` for measurements on real corpora.
+
+**How the disk-image number was measured.** Two 200 MiB APFS images were created
+with `hdiutil` (`hdiutil create -size 200m -fs APFS ...`), each holding a real
+source tree (the second also holds an extra version), so each image is ~92%
+written-zero free space — not sparse holes, so `SEEK_HOLE` would not skip them.
+Both images were chunked with `cargo run --release --example catbench` at
+`min=2048, max=14336`. Plain mincdc produced 182,701 records; the caterpillar
+produced 7,798, with identical deduplicated content. Full method and the other
+corpora (Linux kernels, containers, SQLite, source trees) are in
+`examples/REALBENCH_RESULTS.md`.
 
 This fork also fixes a soundness bug in the upstream SIMD prefetch and adds test
 coverage (cross-SIMD-width determinism, an invariant/oracle harness).

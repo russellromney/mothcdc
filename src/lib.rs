@@ -40,7 +40,7 @@
 //! # Examples
 //!
 //! ```rust
-//! # use mincdc::{MinCdcHash4, SliceChunker};
+//! # use mincatcdc::{MinCdcHash4, SliceChunker};
 //! let data = b"Hello, world! This is an example of MinCDC chunking.";
 //!
 //! // Chunks between 8 and 16 bytes, using MinCdcHash4.

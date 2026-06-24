@@ -1,13 +1,13 @@
 [package]
-name = "mincdc"
-version = "0.1.0"
-authors = ["Orson Peters <orsonpeters@gmail.com>"]
+name = "mincatcdc"
+version = "0.2.0"
+authors = ["Orson Peters <orsonpeters@gmail.com>", "Russell Romney"]
 license = "Zlib"
-repository = "https://github.com/orlp/mincdc"
+repository = "https://github.com/russellromney/mincatcdc"
 readme = "README.md"
-keywords = ["cdc", "chunking"]
+keywords = ["cdc", "chunking", "deduplication"]
 categories = ["algorithms", "compression"]
-description = "A very simple yet efficient content-defined chunking algorithm."
+description = "A fork of MinCDC adding a caterpillar layer: metadata-efficient content-defined chunking on redundant data."
 edition = "2024"
 rust-version = "1.85"
 exclude = ["assets", "tools"]

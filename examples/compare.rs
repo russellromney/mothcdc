@@ -18,8 +18,8 @@
 use std::time::Instant;
 
 use fastcdc::v2020::FastCDC;
-use mincdc::caterpillar::{CaterpillarChunker, Segment};
-use mincdc::{MinCdcHash4, SliceChunker};
+use mincatcdc::caterpillar::{CaterpillarChunker, Segment};
+use mincatcdc::{MinCdcHash4, SliceChunker};
 
 fn fnv1a(bytes: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
