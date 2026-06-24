@@ -64,6 +64,9 @@ const DEFAULT_MULTIPLIER: u32 = 0x915f77f5;
 const DEFAULT_ADDEND: u32 = 0x34636463;
 const MIN_BUFFER_SIZE: usize = 1024 * 1024 * 4;
 
+/// PROTOTYPE: caterpillar coalescing layer (metadata efficiency on periodic data).
+pub mod caterpillar;
+
 pub(crate) mod scalar;
 
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
