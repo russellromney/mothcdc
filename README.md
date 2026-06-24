@@ -25,30 +25,29 @@ information on usage.
 This is a fork of [orlp/mincdc](https://github.com/orlp/mincdc) that adds one
 thing on top: a **caterpillar** layer.
 
-**The problem it fixes.** Like any content-defined chunker, mincdc turns a long
+Like any content-defined chunker, mincdc turns a long
 run of identical bytes — zeros, padding, a repeated block — into a flood of tiny
-chunks. Each chunk is a metadata record (a fingerprint, an index entry). The
+chunks. Each chunk is a metadata record you have to keep around. The
 data dedupes to almost nothing, but you still pay to track all those records. A
 mostly-empty 200 MiB disk image, for example, becomes ~182,000 records.
 
-**What the caterpillar does.** It is a small, lossless pass over the chunk stream
+The caterpillar is a small, lossless pass over the chunk stream
 that collapses any run of byte-identical adjacent chunks into a single record
 with a repeat count. On that disk image: **182,701 → 7,798 records (−96%)**, with
 no change to what is stored and no preprocessing required. On normal data it does
 nothing and costs nothing (it is a no-op when there are no runs), so it keeps
 mincdc's speed and deduplication everywhere else.
 
-**Lineage.** The idea comes from the [Chonkers
+The caterpillar idea comes from the [Chonkers
 algorithm](https://arxiv.org/abs/2509.11121) (Berger, 2025), which calls a
-periodic run a *caterpillar*. We borrowed just that one practical idea and put it
-on top of mincdc rather than adopting the whole (heavier) Chonkers machinery.
+periodic run a *caterpillar*.
 
-**Why it's nice.** It's a drop-in wrapper that gives you metadata-efficient CDC
+The output: metadata-efficient CDC
 on redundant data without writing any domain-specific preprocessing (zero
 detection, sparse reads, etc.). See `examples/CATBENCH_RESULTS.md` and
 `examples/REALBENCH_RESULTS.md` for measurements on real corpora.
 
-**How the disk-image number was measured.** Two 200 MiB APFS images were created
+To get the disk-image number, two 200 MiB APFS images were created
 with `hdiutil` (`hdiutil create -size 200m -fs APFS ...`), each holding a real
 source tree (the second also holds an extra version), so each image is ~92%
 written-zero free space — not sparse holes, so `SEEK_HOLE` would not skip them.
@@ -56,7 +55,7 @@ Both images were chunked with `cargo run --release --example catbench` at
 `min=2048, max=14336`. Plain mincdc produced 182,701 records; the caterpillar
 produced 7,798, with identical deduplicated content. Full method and the other
 corpora (Linux kernels, containers, SQLite, source trees) are in
-`examples/REALBENCH_RESULTS.md`.
+`examples/REALBENCH_RESULTS.md`. Obviously the benchmark is specific to this case. YMMV. 
 
 This fork also fixes a soundness bug in the upstream SIMD prefetch and adds test
 coverage (cross-SIMD-width determinism, an invariant/oracle harness).
