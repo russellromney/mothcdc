@@ -307,3 +307,84 @@ pub fn argmin_u32_overlapping_hashed<const SHOULD_HASH: bool>(
         within_four_offset
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{DEFAULT_ADDEND, DEFAULT_MULTIPLIER};
+    use rand::distr::StandardUniform;
+    use rand::prelude::*;
+
+    // Reconstruct the full argmin from a "within-four" SIMD result, mirroring
+    // the dispatch logic in argmin_u32_overlapping_hashed. The *_impl functions
+    // only locate the block containing the global minimizer within the next four
+    // bytes; the public wrapper resolves the exact position with a final scalar
+    // bump, so the test must do the same before comparing to the scalar oracle.
+    macro_rules! full_from_impl {
+        ($within_four:expr, $hash:literal, $mul:expr, $add:expr, $bytes:expr) => {{
+            const MIN_SIMD_LEN: usize = 16 + 3;
+            let bytes: &[u8] = $bytes;
+            let within_four = $within_four;
+            if bytes.len() >= MIN_SIMD_LEN {
+                within_four
+                    + scalar::argmin_u32_overlapping_hashed_four::<$hash>(
+                        &bytes[within_four..],
+                        $mul,
+                        $add,
+                    )
+            } else {
+                within_four
+            }
+        }};
+    }
+
+    // Every SIMD width available on this CPU must produce exactly the same
+    // argmin as the scalar oracle (and therefore as each other) for *all*
+    // inputs. If two widths disagreed, two machines could place chunk
+    // boundaries differently and silently break cross-machine deduplication.
+    //
+    // The existing `test_argmin_overlapped` only exercises the auto-dispatched
+    // (best-available) width, leaving the narrower widths untested on wide-SIMD
+    // hosts. This test calls each width directly, guarded by runtime detection.
+    //
+    // Note: under Rosetta 2 only the SSE4.1 path is reachable; AVX2/AVX-512 are
+    // covered by CI on native x86 hardware.
+    #[test]
+    fn test_simd_widths_agree_with_scalar() {
+        for size in 0..2048usize {
+            let rng = SmallRng::seed_from_u64(size as u64);
+            let bytes: Vec<u8> = rng.sample_iter(StandardUniform).take(size).collect();
+
+            // SHOULD_HASH = false (multiplier/addend are ignored).
+            let want = scalar::argmin_u32_overlapping_hashed::<false>(&bytes, 1, 0);
+            if is_x86_feature_detected!("sse4.1") {
+                let got = full_from_impl!(unsafe { sse41_impl::<false>(&bytes, 1, 0) }, false, 1, 0, &bytes);
+                assert_eq!(got, want, "sse4.1 nohash size={size}");
+            }
+            if is_x86_feature_detected!("avx2") {
+                let got = full_from_impl!(unsafe { avx2_impl::<false>(&bytes, 1, 0) }, false, 1, 0, &bytes);
+                assert_eq!(got, want, "avx2 nohash size={size}");
+            }
+            if is_x86_feature_detected!("avx512f") {
+                let got = full_from_impl!(unsafe { avx512_impl::<false>(&bytes, 1, 0) }, false, 1, 0, &bytes);
+                assert_eq!(got, want, "avx512f nohash size={size}");
+            }
+
+            // SHOULD_HASH = true, using the default hash parameters.
+            let (mul, add) = (DEFAULT_MULTIPLIER, DEFAULT_ADDEND);
+            let want = scalar::argmin_u32_overlapping_hashed::<true>(&bytes, mul, add);
+            if is_x86_feature_detected!("sse4.1") {
+                let got = full_from_impl!(unsafe { sse41_impl::<true>(&bytes, mul, add) }, true, mul, add, &bytes);
+                assert_eq!(got, want, "sse4.1 hash size={size}");
+            }
+            if is_x86_feature_detected!("avx2") {
+                let got = full_from_impl!(unsafe { avx2_impl::<true>(&bytes, mul, add) }, true, mul, add, &bytes);
+                assert_eq!(got, want, "avx2 hash size={size}");
+            }
+            if is_x86_feature_detected!("avx512f") {
+                let got = full_from_impl!(unsafe { avx512_impl::<true>(&bytes, mul, add) }, true, mul, add, &bytes);
+                assert_eq!(got, want, "avx512f hash size={size}");
+            }
+        }
+    }
+}
