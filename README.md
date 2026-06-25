@@ -25,14 +25,14 @@ information on usage.
 This is a fork of [orlp/mincdc](https://github.com/orlp/mincdc) that adds one
 thing on top: a **caterpillar** layer.
 
-On a long run of identical bytes — zeros, padding, a repeated block — mincdc
-emits a flood of tiny, min-size chunks. (This is the flip side of its
-bounded-size guarantee. Threshold-based chunkers like FastCDC do the opposite on
-such runs — a few oversized max-size chunks — so neither family escapes paying
-metadata proportional to the run.) Each chunk is a metadata record you have to
-keep around. The data dedupes to almost nothing, but you still pay to track all
-those records. A mostly-empty 200 MiB disk image, for example, becomes ~182,000
-records — which the caterpillar collapses to one record per run.
+When data has a long run of repeated bytes — zeros, padding, the same block over
+and over — mincdc cuts it into a flood of tiny chunks. Each chunk is a record you
+have to store and track. The bytes dedupe down to almost nothing, but you still
+keep every record: a mostly-empty 200 MiB disk image becomes ~182,000 of them.
+
+(This is mincdc's behavior, not every chunker's. FastCDC does the opposite on
+such a run — a few oversized chunks — but either way a long run costs you
+metadata.)
 
 The caterpillar is a small, lossless pass over the chunk stream
 that collapses any run of byte-identical adjacent chunks into a single record
