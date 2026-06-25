@@ -42,8 +42,20 @@ best-of-5 shows −0%.)
 It's a free pass that erases mincdc's zero-fill record explosion on disk/VM/
 container data.
 
-## cat-period (tier 2) — don't ship
+## cat-period (tier 2) — evaluated and removed
 
 −76% to −99% throughput on every corpus (283 µs/chunk on containers!) and never
 fewer records than tier-1. The phase-rotating case it targets did not occur in
-any real corpus.
+any real corpus: mincdc self-aligns its boundaries to most periods, so tier-1
+already collapses periodic data whenever a period multiple fits in `[min, max]`.
+
+Because it never earned its cost, the second tier was removed from the public API
+(no more `CaterpillarChunker::with_period_detection`). The full implementation —
+content-defined period detection, Booth-rotation canonicalization, the
+`Segment::Periodic` variant, and these benchmarks — is preserved in git history:
+
+- branch `proto/caterpillar-period`
+- last commit that still carried tier-2 on the main line: `35cf93e`
+
+The `cat-period` rows above are kept as the record of why tier-1 alone is the
+shipped design. (The earlier rows were produced with tier-2 still present.)

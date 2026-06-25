@@ -1,5 +1,6 @@
 // Focused speed / latency / metadata comparison: plain mincdc vs the caterpillar
-// layers (tier-1 RLE, tier-2 period). No fastcdc. Best-of-N timing.
+// layer (tier-1 RLE of byte-identical adjacent chunks). No fastcdc. Best-of-N
+// timing.
 //
 //   cargo run --release --example catbench -- <path> [<path> ...]
 //
@@ -106,7 +107,8 @@ fn main() {
     let cdc = MinCdcHash4::new();
 
     // also report unique records (dedup) once, deterministic.
-    let dedup = |full: Option<bool>| -> (usize, usize) {
+    // `cat == false` => plain mincdc; `cat == true` => caterpillar (tier-1).
+    let dedup = |cat: bool| -> (usize, usize) {
         // returns (records, unique)
         let mut seen: HashMap<u64, ()> = HashMap::new();
         let mut rec = 0;
@@ -119,24 +121,16 @@ fn main() {
             h
         };
         for b in &blobs {
-            match full {
-                None => {
-                    for c in SliceChunker::new(b, MIN, MAX, cdc) {
-                        seen.insert(fnv(&c), ());
-                        rec += 1;
-                    }
-                },
-                Some(f) => {
-                    let it = if f {
-                        CaterpillarChunker::new(b, MIN, MAX, cdc).with_period_detection(usize::MAX)
-                    } else {
-                        CaterpillarChunker::new(b, MIN, MAX, cdc)
-                    };
-                    for s in it {
-                        seen.insert(fnv(s.dedup_key()), ());
-                        rec += 1;
-                    }
-                },
+            if cat {
+                for s in CaterpillarChunker::new(b, MIN, MAX, cdc) {
+                    seen.insert(fnv(s.dedup_key()), ());
+                    rec += 1;
+                }
+            } else {
+                for c in SliceChunker::new(b, MIN, MAX, cdc) {
+                    seen.insert(fnv(&c), ());
+                    rec += 1;
+                }
             }
         }
         (rec, seen.len())
@@ -155,22 +149,17 @@ fn main() {
         std::hint::black_box(s);
         n
     });
-    let (prec, puniq) = dedup(None);
+    let (prec, puniq) = dedup(false);
     let plain_gbps = total as f64 / secs / 1e9;
     report("mincdc-plain", secs, prec, total, prec, plain_gbps);
     println!("                 (unique records: {puniq})");
 
-    for (name, full) in [("cat-simple", false), ("cat-period", true)] {
+    {
         let (secs, _) = best_of(|| {
             let mut n = 0usize;
             let mut s = 0usize;
             for b in &blobs {
-                let it = if full {
-                    CaterpillarChunker::new(b, MIN, MAX, cdc).with_period_detection(usize::MAX)
-                } else {
-                    CaterpillarChunker::new(b, MIN, MAX, cdc)
-                };
-                for seg in it {
+                for seg in CaterpillarChunker::new(b, MIN, MAX, cdc) {
                     s ^= seg.offset();
                     n += 1;
                 }
@@ -178,8 +167,8 @@ fn main() {
             std::hint::black_box(s);
             n
         });
-        let (rec, uniq) = dedup(Some(full));
-        report(name, secs, rec, total, prec, plain_gbps);
+        let (rec, uniq) = dedup(true);
+        report("cat", secs, rec, total, prec, plain_gbps);
         println!("                 (unique records: {uniq})");
     }
 }

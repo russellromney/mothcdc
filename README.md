@@ -14,7 +14,7 @@ deduplicated.
 To start using `mincatcdc` add the following to your `Cargo.toml`:
 
     [dependencies]
-    mincatcdc = "0.4"
+    mincatcdc = "0.5"
 
 Please refer to [the documentation](https://docs.rs/mincatcdc) for more
 information on usage.
@@ -60,7 +60,7 @@ use mincatcdc::{CaterpillarChunker, MinCdcHash4};
 
 for seg in CaterpillarChunker::new(&data, 2048, 14336, MinCdcHash4::new()) {
     // Store the unique content once. `dedup_key()` returns the bytes to
-    // fingerprint regardless of variant (a chunk, a repeated unit, or a period).
+    // fingerprint regardless of variant (a single chunk or a repeated unit).
     store(hash(seg.dedup_key()), seg.dedup_key());
     // Record where it goes: offset, total byte length, and how many underlying
     // chunks this one record stands for.
@@ -68,13 +68,15 @@ for seg in CaterpillarChunker::new(&data, 2048, 14336, MinCdcHash4::new()) {
 }
 ```
 
-`CaterpillarChunker::new` is the recommended default. There is also an
-experimental `.with_period_detection(budget)` that catches phase-rotating
-periodic runs the default can't, but it is usually not worth its cost — see
-`examples/CATBENCH_RESULTS.md`. `CaterpillarChunker` works on an in-memory slice;
-for inputs larger than memory, `CaterpillarReadChunker` does the same coalescing
-over a streaming reader in bounded memory — zero-copy (it yields borrowed
-`Segment`s valid until the next call, like `ReadChunker`), tier 1 only.
+`CaterpillarChunker` works on an in-memory slice; for inputs larger than memory,
+`CaterpillarReadChunker` does the same coalescing over a streaming reader in
+bounded memory — zero-copy (it yields borrowed `Segment`s valid until the next
+call, like `ReadChunker`).
+
+(An experimental second tier — content-defined *period detection* for
+phase-rotating runs — was evaluated and removed: mincdc self-aligns to most
+periods so it rarely helped, and it cost 76–99% throughput. See
+`examples/CATBENCH_RESULTS.md` and the `proto/caterpillar-period` branch.)
 
 To get the disk-image number, two 200 MiB APFS images were created
 with `hdiutil` (`hdiutil create -size 200m -fs APFS ...`), each holding a real

@@ -1,5 +1,5 @@
 // Comparison benchmark: fastcdc-rs (v2020, 4.x) vs plain mincdc vs mincdc with
-// the caterpillar layers (tier-1 RLE and tier-2 period detection), across
+// the caterpillar layer (tier-1 RLE of byte-identical adjacent chunks), across
 // scenarios that stress speed, metadata (record count) and deduplication.
 //
 //   cargo run --release --example compare
@@ -136,9 +136,12 @@ fn run_fastcdc(data: &[u8], min: usize, avg: usize, max: usize, d: &mut Dedup) -
 fn run_mincdc(data: &[u8], min: usize, max: usize, d: &mut Dedup) -> Stats {
     let cdc = MinCdcHash4::new();
     let (gbps, records) = bench(data.len(), || {
-        SliceChunker::new(data, min, max, cdc)
-            .map(|c| std::hint::black_box(c.offset()))
-            .count()
+        let mut n = 0;
+        for c in SliceChunker::new(data, min, max, cdc) {
+            std::hint::black_box(c.offset());
+            n += 1;
+        }
+        n
     });
     for c in SliceChunker::new(data, min, max, cdc) {
         d.add(fnv1a(&c), c.len(), c.len());
@@ -150,19 +153,18 @@ fn run_mincdc(data: &[u8], min: usize, max: usize, d: &mut Dedup) -> Stats {
     }
 }
 
-fn run_caterpillar(data: &[u8], min: usize, max: usize, full: bool, d: &mut Dedup) -> Stats {
+fn run_caterpillar(data: &[u8], min: usize, max: usize, d: &mut Dedup) -> Stats {
     let cdc = MinCdcHash4::new();
-    let make = |full: bool| {
-        if full {
-            CaterpillarChunker::new(data, min, max, cdc).with_period_detection(usize::MAX)
-        } else {
-            CaterpillarChunker::new(data, min, max, cdc)
-        }
-    };
+    let make = || CaterpillarChunker::new(data, min, max, cdc);
     let (gbps, records) = bench(data.len(), || {
-        make(full).map(|s| std::hint::black_box(s.offset())).count()
+        let mut n = 0;
+        for s in make() {
+            std::hint::black_box(s.offset());
+            n += 1;
+        }
+        n
     });
-    for s in make(full) {
+    for s in make() {
         d.add(fnv1a(s.dedup_key()), s.dedup_key().len(), s.len());
     }
     Stats {
@@ -173,11 +175,7 @@ fn run_caterpillar(data: &[u8], min: usize, max: usize, full: bool, d: &mut Dedu
 }
 
 fn row(name: &str, s: &Stats, d: &Dedup) {
-    let mean = if s.records > 0 {
-        s.logical / s.records
-    } else {
-        0
-    };
+    let mean = s.logical.checked_div(s.records).unwrap_or(0);
     println!(
         "  {name:<18} {gbps:>7.2} GB/s  records={rec:>7}  mean={mean:>6}  uniq={uniq:>7}  dedup={dd:>5.1}%",
         gbps = s.gbps,
@@ -188,7 +186,7 @@ fn row(name: &str, s: &Stats, d: &Dedup) {
 }
 
 /// Versioned dedup: chunk v1 and v2 (= v1 with an inserted blob), union the
-/// records, report cross-version dedup. Shows the caterpillar layers don't hurt
+/// records, report cross-version dedup. Shows the caterpillar layer doesn't hurt
 /// normal CDC dedup.
 fn scenario_versioned(min: usize, avg: usize, max: usize) {
     let v1 = xorshift(2024, 8 * 1024 * 1024);
@@ -235,16 +233,16 @@ fn scenario_versioned(min: usize, avg: usize, max: usize) {
         d.dedup_pct()
     );
 
-    // mincdc + cat-period
+    // mincdc + caterpillar
     let mut d = Dedup::new();
     for data in [&v1[..], &v2[..]] {
-        for s in CaterpillarChunker::new(data, min, max, cdc).with_period_detection(usize::MAX) {
+        for s in CaterpillarChunker::new(data, min, max, cdc) {
             d.add(fnv1a(s.dedup_key()), s.dedup_key().len(), s.len());
         }
     }
     println!(
         "  {:<18} records={:>7}  uniq={:>7}  dedup={:>5.1}%",
-        "mincdc+cat-period",
+        "mincdc+cat",
         d.records,
         d.unique(),
         d.dedup_pct()
@@ -271,11 +269,8 @@ fn run_suite(min: usize, avg: usize, mc_max: usize, fast_max: usize, n: usize) {
         let s = run_mincdc(data, min, mc_max, &mut d);
         row("mincdc-plain", &s, &d);
         let mut d = Dedup::new();
-        let s = run_caterpillar(data, min, mc_max, false, &mut d);
-        row("mincdc+cat-simple", &s, &d);
-        let mut d = Dedup::new();
-        let s = run_caterpillar(data, min, mc_max, true, &mut d);
-        row("mincdc+cat-period", &s, &d);
+        let s = run_caterpillar(data, min, mc_max, &mut d);
+        row("mincdc+cat", &s, &d);
     };
 
     block("random / incompressible", &xorshift(1, n));
@@ -292,7 +287,9 @@ fn run_suite(min: usize, avg: usize, mc_max: usize, fast_max: usize, n: usize) {
         block("periodic-777 (wide win)", &data);
     }
 
-    // Same data, NARROW window where no period multiple fits: only tier-2 helps.
+    // Same data, NARROW window where no period multiple fits: tier-1 cannot
+    // coalesce the rotating chunks (this is the case the removed period-detection
+    // tier targeted; see examples/CATBENCH_RESULTS.md for why it wasn't worth it).
     {
         let p = xorshift(42, 777);
         let mut data = Vec::with_capacity(n);
@@ -311,11 +308,8 @@ fn run_suite(min: usize, avg: usize, mc_max: usize, fast_max: usize, n: usize) {
         let s = run_mincdc(&data, nmin, nmax, &mut d);
         row("mincdc-plain", &s, &d);
         let mut d = Dedup::new();
-        let s = run_caterpillar(&data, nmin, nmax, false, &mut d);
-        row("mincdc+cat-simple", &s, &d);
-        let mut d = Dedup::new();
-        let s = run_caterpillar(&data, nmin, nmax, true, &mut d);
-        row("mincdc+cat-period", &s, &d);
+        let s = run_caterpillar(&data, nmin, nmax, &mut d);
+        row("mincdc+cat", &s, &d);
     }
 
     // Mixed: random with embedded zero-runs and a repeated record block.

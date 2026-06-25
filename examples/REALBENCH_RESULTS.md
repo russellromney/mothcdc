@@ -54,11 +54,14 @@ Corpora (all real or built from real data):
 - Source / kernel / DB: a free no-op (no long contiguous runs to coalesce).
 - Never hurts dedup; ~free where it can't help. Pure insurance.
 
-**Tier-2 caterpillar (cat-period): do not ship.**
+**Tier-2 caterpillar (cat-period): evaluated and removed.**
 - It never reduced records below tier-1 on ANY real corpus (the phase-rotating
   case it targets did not occur — mincdc self-aligns, and real periodic data
   either dedups via content addressing or was rewritten away).
 - Its gate is catastrophic on real data: 0.03 GB/s on containers, 0.97 on disk.
+- Removed from the public API for these reasons; the implementation and these
+  `cat-period` rows are preserved in git (branch `proto/caterpillar-period`, last
+  main-line commit with tier-2 `35cf93e`). See `examples/CATBENCH_RESULTS.md`.
 
 **Honest surprises the real data exposed (that synthetic tests missed):**
 - **SQLite VACUUM → 0% dedup.** A full rewrite reshuffles pages, destroying

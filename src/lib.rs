@@ -209,30 +209,52 @@ impl<'a, C> SliceChunker<'a, C> {
     }
 }
 
+/// The length of the next chunk at the front of the available bytes `avail`, or
+/// `None` if it cannot be decided without more data (only possible when not at
+/// end of input, i.e. `!eof`). This is the single source of truth for chunk
+/// boundary placement, shared by [`SliceChunker`], [`ReadChunker`], and the
+/// caterpillar layer so they cannot silently diverge.
+pub(crate) fn next_chunk_len<C: Cdc>(
+    avail: &[u8],
+    min_size: usize,
+    max_size: usize,
+    eof: bool,
+    cdc: &C,
+) -> Option<usize> {
+    let n = avail.len();
+    if n == 0 {
+        return None;
+    }
+    // Can't reliably place a boundary without the full decision window, unless
+    // this is all the data there is.
+    if !eof && n < max_size + 1 {
+        return None;
+    }
+    if n <= min_size {
+        return Some(n); // final short chunk (only reachable at eof)
+    }
+    let start = min_size.saturating_sub(cdc.window_size());
+    Some(start + cdc.best_splitpoint(&avail[start..max_size.min(n)]))
+}
+
 impl<'a, C: Cdc> Iterator for SliceChunker<'a, C> {
     type Item = Chunk<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let bytes_left = self.bytes.len() - self.offset;
-        if bytes_left == 0 {
+        if self.offset == self.bytes.len() {
             return None;
         }
-
-        if bytes_left <= self.min_size {
-            let ret = Chunk::new(&self.bytes[self.offset..], self.offset);
-            self.offset = self.bytes.len();
-            return Some(ret);
-        }
-
-        let start_search_offset =
-            self.offset + self.min_size.saturating_sub(self.cdc.window_size());
-        let stop_search_offset = self.offset + self.max_size;
-        let search = &self.bytes[start_search_offset..stop_search_offset.min(self.bytes.len())];
-        let ideal_split = self.cdc.best_splitpoint(search);
-
-        let splitpoint = start_search_offset + ideal_split;
-        let ret = Chunk::new(&self.bytes[self.offset..splitpoint], self.offset);
-        self.offset = splitpoint;
+        // The whole input is in memory, so we always know where the end is.
+        let len = next_chunk_len(
+            &self.bytes[self.offset..],
+            self.min_size,
+            self.max_size,
+            true,
+            &self.cdc,
+        )
+        .expect("eof=true always yields a chunk for non-empty input");
+        let ret = Chunk::new(&self.bytes[self.offset..self.offset + len], self.offset);
+        self.offset += len;
         Some(ret)
     }
 }
@@ -310,36 +332,27 @@ impl<R: Read, C: Cdc> ReadChunker<R, C> {
             self.unread_bytes_in_buf += bytes_read;
         }
 
-        // We know this is EOF because bytes_needed_for_decision > self.min_size.
-        if self.unread_bytes_in_buf <= self.min_size {
-            let ret = Chunk::new(
-                &self.buf[self.buf_offset..self.buf_offset + self.unread_bytes_in_buf],
-                self.stream_offset,
-            );
-            self.stream_offset = usize::MAX;
-            return if ret.bytes.is_empty() {
+        // The fill loop stops at `bytes_needed_for_decision` (= max+1) or EOF, so
+        // if we have fewer than that, we've hit the end of the reader.
+        let avail = &self.buf[self.buf_offset..self.buf_offset + self.unread_bytes_in_buf];
+        let eof = self.unread_bytes_in_buf < bytes_needed_for_decision;
+        match next_chunk_len(avail, self.min_size, self.max_size, eof, &self.cdc) {
+            None => {
+                // Reader is exhausted.
+                self.stream_offset = usize::MAX;
                 Ok(None)
-            } else {
+            },
+            Some(len) => {
+                let ret = Chunk::new(
+                    &self.buf[self.buf_offset..self.buf_offset + len],
+                    self.stream_offset,
+                );
+                self.stream_offset += len;
+                self.buf_offset += len;
+                self.unread_bytes_in_buf -= len;
                 Ok(Some(ret))
-            };
+            },
         }
-
-        let start_search_offset = self.min_size.saturating_sub(self.cdc.window_size());
-        let stop_search_offset = self.max_size;
-        let search = &self.buf[self.buf_offset + start_search_offset
-            ..self.buf_offset + stop_search_offset.min(self.unread_bytes_in_buf)];
-        let ideal_split = self.cdc.best_splitpoint(search);
-
-        let splitpoint = start_search_offset + ideal_split;
-        let ret = Chunk::new(
-            &self.buf[self.buf_offset..self.buf_offset + splitpoint],
-            self.stream_offset,
-        );
-        let len = ret.bytes.len();
-        self.stream_offset += len;
-        self.buf_offset += len;
-        self.unread_bytes_in_buf -= len;
-        Ok(Some(ret))
     }
 }
 

@@ -8,9 +8,9 @@
 // real store); dedup is measured across the whole corpus (content addressing),
 // so passing two version trees measures cross-version dedup.
 //
-// Algorithms: fastcdc-v2020 (4.x), mincdc-plain, mincdc+cat-simple (tier 1),
-// mincdc+cat-period (tier 2). Target ~8 KiB; fastcdc gets a large max to avoid
-// its forced-cut tail (per the mincdc README methodology).
+// Algorithms: fastcdc-v2020 (4.x), mincdc-plain, mincdc+cat (tier-1 RLE).
+// Target ~8 KiB; fastcdc gets a large max to avoid its forced-cut tail (per the
+// mincdc README methodology).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -170,33 +170,23 @@ fn main() {
     }
     a.report("mincdc-plain", total_bytes);
 
-    // cat-simple (tier 1) and cat-period (tier 2)
-    for (label, full) in [("mincdc+cat-simple", false), ("mincdc+cat-period", true)] {
+    // caterpillar (tier-1 RLE of byte-identical adjacent chunks)
+    {
         let mut a = Acc::new();
         let t = Instant::now();
         let mut sink = 0usize;
         for b in &blobs {
-            let it = if full {
-                CaterpillarChunker::new(b, MIN, MC_MAX, cdc).with_period_detection(usize::MAX)
-            } else {
-                CaterpillarChunker::new(b, MIN, MC_MAX, cdc)
-            };
-            for s in it {
+            for s in CaterpillarChunker::new(b, MIN, MC_MAX, cdc) {
                 sink ^= s.offset();
             }
         }
         a.secs = t.elapsed().as_secs_f64();
         std::hint::black_box(sink);
         for b in &blobs {
-            let it = if full {
-                CaterpillarChunker::new(b, MIN, MC_MAX, cdc).with_period_detection(usize::MAX)
-            } else {
-                CaterpillarChunker::new(b, MIN, MC_MAX, cdc)
-            };
-            for s in it {
+            for s in CaterpillarChunker::new(b, MIN, MC_MAX, cdc) {
                 a.add(fnv1a(s.dedup_key()), s.dedup_key().len(), s.len());
             }
         }
-        a.report(label, total_bytes);
+        a.report("mincdc+cat", total_bytes);
     }
 }
