@@ -12,7 +12,8 @@
 
 use std::collections::HashMap;
 
-use mincatcdc::{CaterpillarChunker, MinCdcHash4};
+use mincatcdc::{CaterpillarChunker, MinCdcHash4, SliceChunker};
+use proptest::prelude::*;
 
 fn fnv1a(b: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
@@ -35,20 +36,26 @@ fn xorshift(seed: u64, n: usize) -> Vec<u8> {
         .collect()
 }
 
-fn build(data: &[u8], min: usize, max: usize, period: bool) -> CaterpillarChunker<'_, MinCdcHash4> {
+/// `period`: `None` = default (tier-1 only); `Some(budget)` = enable period
+/// detection with that byte budget.
+fn build(
+    data: &[u8],
+    min: usize,
+    max: usize,
+    period: Option<usize>,
+) -> CaterpillarChunker<'_, MinCdcHash4> {
     let c = CaterpillarChunker::new(data, min, max, MinCdcHash4::new());
-    if period {
-        c.with_period_detection(usize::MAX)
-    } else {
-        c
+    match period {
+        Some(budget) => c.with_period_detection(budget),
+        None => c,
     }
 }
 
 /// The full user round-trip: chunk, build a content-addressed store keyed by
 /// `hash(dedup_key())` plus an ordered manifest, then restore from store +
 /// manifest only and assert it equals the input. Also checks `reconstruct_into`.
-fn assert_roundtrip(label: &str, data: &[u8], min: usize, max: usize, period: bool) {
-    let tag = format!("{label} (min={min} max={max} period={period})");
+fn assert_roundtrip(label: &str, data: &[u8], min: usize, max: usize, period: Option<usize>) {
+    let tag = format!("{label} (min={min} max={max} period={period:?})");
 
     // --- ingest ---
     let mut store: HashMap<u64, Vec<u8>> = HashMap::new();
@@ -56,7 +63,7 @@ fn assert_roundtrip(label: &str, data: &[u8], min: usize, max: usize, period: bo
     let mut next_off = 0usize;
     for seg in build(data, min, max, period) {
         assert_eq!(seg.offset(), next_off, "{tag}: non-contiguous offset");
-        assert!(seg.len() > 0, "{tag}: empty segment");
+        assert!(!seg.is_empty(), "{tag}: empty segment");
         // Note: a coalesced segment's len() intentionally exceeds max (it stands
         // for a whole run of chunks), so max only bounds the underlying chunks.
         let key = seg.dedup_key();
@@ -67,10 +74,21 @@ fn assert_roundtrip(label: &str, data: &[u8], min: usize, max: usize, period: bo
     }
     assert_eq!(next_off, data.len(), "{tag}: coverage gap");
 
+    // The caterpillar must represent exactly the same underlying chunks as plain
+    // mincdc — it only groups them, never adds or drops any.
+    let plain = SliceChunker::new(data, min, max, MinCdcHash4::new()).count();
+    let expanded: usize = build(data, min, max, period).map(|s| s.chunk_count()).sum();
+    assert_eq!(
+        expanded, plain,
+        "{tag}: chunk_count {expanded} != plain {plain}"
+    );
+
     // --- restore from store + manifest only (the documented path) ---
     let mut restored = Vec::with_capacity(data.len());
     for (h, len) in &manifest {
-        let bytes = store.get(h).expect("manifest references a chunk not in the store");
+        let bytes = store
+            .get(h)
+            .expect("manifest references a chunk not in the store");
         let mut w = 0;
         while w < *len {
             let take = bytes.len().min(*len - w);
@@ -112,7 +130,7 @@ fn corpora() -> Vec<(&'static str, Vec<u8>)> {
 #[test]
 fn roundtrip_default_and_period_wide_and_narrow() {
     for (name, data) in corpora() {
-        for &period in &[false, true] {
+        for period in [None, Some(usize::MAX)] {
             // Wide window (normal CDC) and a narrow window (forces real rotation
             // when period detection is on).
             assert_roundtrip(name, &data, 2048, 14336, period);
@@ -132,5 +150,22 @@ fn roundtrip_offphase_periodic_with_detection() {
     while data.len() < 4 * 1024 * 1024 {
         data.extend_from_slice(&period);
     }
-    assert_roundtrip("offphase-period", &data, 2048, 2200, true);
+    assert_roundtrip("offphase-period", &data, 2048, 2200, Some(usize::MAX));
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 400, ..ProptestConfig::default() })]
+
+    /// Fuzz the full round-trip over random data, sizes, and budgets — including
+    /// partial budgets and period detection on/off. Shrinks any state-machine
+    /// or reconstruction bug to a minimal case.
+    #[test]
+    fn prop_caterpillar_roundtrip(
+        data in proptest::collection::vec(any::<u8>(), 0..8192),
+        min in 16usize..512,
+        extra in 0usize..512,
+        period in proptest::option::of(0usize..100_000),
+    ) {
+        assert_roundtrip("prop", &data, min, min + extra, period);
+    }
 }

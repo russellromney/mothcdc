@@ -358,15 +358,33 @@ mod tests {
             // SHOULD_HASH = false (multiplier/addend are ignored).
             let want = scalar::argmin_u32_overlapping_hashed::<false>(&bytes, 1, 0);
             if is_x86_feature_detected!("sse4.1") {
-                let got = full_from_impl!(unsafe { sse41_impl::<false>(&bytes, 1, 0) }, false, 1, 0, &bytes);
+                let got = full_from_impl!(
+                    unsafe { sse41_impl::<false>(&bytes, 1, 0) },
+                    false,
+                    1,
+                    0,
+                    &bytes
+                );
                 assert_eq!(got, want, "sse4.1 nohash size={size}");
             }
             if is_x86_feature_detected!("avx2") {
-                let got = full_from_impl!(unsafe { avx2_impl::<false>(&bytes, 1, 0) }, false, 1, 0, &bytes);
+                let got = full_from_impl!(
+                    unsafe { avx2_impl::<false>(&bytes, 1, 0) },
+                    false,
+                    1,
+                    0,
+                    &bytes
+                );
                 assert_eq!(got, want, "avx2 nohash size={size}");
             }
             if is_x86_feature_detected!("avx512f") {
-                let got = full_from_impl!(unsafe { avx512_impl::<false>(&bytes, 1, 0) }, false, 1, 0, &bytes);
+                let got = full_from_impl!(
+                    unsafe { avx512_impl::<false>(&bytes, 1, 0) },
+                    false,
+                    1,
+                    0,
+                    &bytes
+                );
                 assert_eq!(got, want, "avx512f nohash size={size}");
             }
 
@@ -374,15 +392,33 @@ mod tests {
             let (mul, add) = (DEFAULT_MULTIPLIER, DEFAULT_ADDEND);
             let want = scalar::argmin_u32_overlapping_hashed::<true>(&bytes, mul, add);
             if is_x86_feature_detected!("sse4.1") {
-                let got = full_from_impl!(unsafe { sse41_impl::<true>(&bytes, mul, add) }, true, mul, add, &bytes);
+                let got = full_from_impl!(
+                    unsafe { sse41_impl::<true>(&bytes, mul, add) },
+                    true,
+                    mul,
+                    add,
+                    &bytes
+                );
                 assert_eq!(got, want, "sse4.1 hash size={size}");
             }
             if is_x86_feature_detected!("avx2") {
-                let got = full_from_impl!(unsafe { avx2_impl::<true>(&bytes, mul, add) }, true, mul, add, &bytes);
+                let got = full_from_impl!(
+                    unsafe { avx2_impl::<true>(&bytes, mul, add) },
+                    true,
+                    mul,
+                    add,
+                    &bytes
+                );
                 assert_eq!(got, want, "avx2 hash size={size}");
             }
             if is_x86_feature_detected!("avx512f") {
-                let got = full_from_impl!(unsafe { avx512_impl::<true>(&bytes, mul, add) }, true, mul, add, &bytes);
+                let got = full_from_impl!(
+                    unsafe { avx512_impl::<true>(&bytes, mul, add) },
+                    true,
+                    mul,
+                    add,
+                    &bytes
+                );
                 assert_eq!(got, want, "avx512f hash size={size}");
             }
         }

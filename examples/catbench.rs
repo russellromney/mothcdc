@@ -48,7 +48,14 @@ fn best_of<F: FnMut() -> usize>(mut f: F) -> (f64, usize) {
     (best, n)
 }
 
-fn report(name: &str, secs: f64, records: usize, total_bytes: u64, plain_rec: usize, plain_gbps: f64) {
+fn report(
+    name: &str,
+    secs: f64,
+    records: usize,
+    total_bytes: u64,
+    plain_rec: usize,
+    plain_gbps: f64,
+) {
     let gbps = total_bytes as f64 / secs / 1e9;
     let ns_chunk = secs * 1e9 / records.max(1) as f64;
     let meta = records * RECORD_BYTES;
@@ -91,7 +98,11 @@ fn main() {
             blobs.push(b);
         }
     }
-    println!("\n### {} files, {:.1} MiB", blobs.len(), total as f64 / (1024.0 * 1024.0));
+    println!(
+        "\n### {} files, {:.1} MiB",
+        blobs.len(),
+        total as f64 / (1024.0 * 1024.0)
+    );
     let cdc = MinCdcHash4::new();
 
     // also report unique records (dedup) once, deterministic.
@@ -114,7 +125,7 @@ fn main() {
                         seen.insert(fnv(&c), ());
                         rec += 1;
                     }
-                }
+                },
                 Some(f) => {
                     let it = if f {
                         CaterpillarChunker::new(b, MIN, MAX, cdc).with_period_detection(usize::MAX)
@@ -125,7 +136,7 @@ fn main() {
                         seen.insert(fnv(s.dedup_key()), ());
                         rec += 1;
                     }
-                }
+                },
             }
         }
         (rec, seen.len())

@@ -12,7 +12,7 @@
 //!  3. Property-based + corpus -- random (proptest, shrinking) + adversarial.
 //!  4. Edit-locality          -- the property that makes CDC useful for dedup.
 //!  5. Reader/Slice agreement -- ReadChunker == SliceChunker under a hostile
-//!                               (1-byte) reader that stresses buffer refills.
+//!     (1-byte) reader that stresses buffer refills.
 
 #![allow(deprecated)] // MinCdc4 is deprecated but we still want to test it.
 
@@ -56,7 +56,12 @@ fn evaluate(window: &[u8], hash: Option<(u32, u32)>) -> u32 {
 }
 
 /// Returns the chunk boundaries as `(offset, len)` pairs.
-fn oracle_chunks(bytes: &[u8], min: usize, max: usize, hash: Option<(u32, u32)>) -> Vec<(usize, usize)> {
+fn oracle_chunks(
+    bytes: &[u8],
+    min: usize,
+    max: usize,
+    hash: Option<(u32, u32)>,
+) -> Vec<(usize, usize)> {
     assert!(min <= max && max > 0);
     let mut chunks = Vec::new();
     let mut s = 0usize;
@@ -133,7 +138,13 @@ impl<'a> Read for ChokedReader<'a> {
     }
 }
 
-fn read_chunks(data: &[u8], min: usize, max: usize, mode: Mode, step: usize) -> Vec<(usize, usize)> {
+fn read_chunks(
+    data: &[u8],
+    min: usize,
+    max: usize,
+    mode: Mode,
+    step: usize,
+) -> Vec<(usize, usize)> {
     fn collect<C: Cdc>(
         data: &[u8],
         min: usize,
@@ -151,7 +162,13 @@ fn read_chunks(data: &[u8], min: usize, max: usize, mode: Mode, step: usize) -> 
     }
     match mode {
         Mode::Plain => collect(data, min, max, MinCdc4::new(), step),
-        Mode::Hashed => collect(data, min, max, MinCdcHash4::with_params(HASH_M, HASH_A), step),
+        Mode::Hashed => collect(
+            data,
+            min,
+            max,
+            MinCdcHash4::with_params(HASH_M, HASH_A),
+            step,
+        ),
     }
 }
 
@@ -197,7 +214,8 @@ fn check_all(data: &[u8], min: usize, max: usize, mode: Mode) {
     // Tier 2: differential vs the independent oracle.
     let want = oracle_chunks(data, min, max, hash_params(mode));
     assert_eq!(
-        got, want,
+        got,
+        want,
         "slice chunker disagrees with oracle (mode={mode:?}, min={min}, max={max}, len={})",
         data.len()
     );
@@ -219,7 +237,9 @@ fn check_all(data: &[u8], min: usize, max: usize, mode: Mode) {
 fn corpus() -> Vec<Vec<u8>> {
     let mut v: Vec<Vec<u8>> = Vec::new();
     // Degenerate sizes.
-    for n in [0usize, 1, 2, 3, 4, 5, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65, 100, 1000] {
+    for n in [
+        0usize, 1, 2, 3, 4, 5, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65, 100, 1000,
+    ] {
         v.push(vec![0u8; n]); // all zeros (global min for Plain mode)
         v.push(vec![0xFFu8; n]); // all 0xFF (global max)
         v.push((0..n).map(|i| i as u8).collect()); // counter
@@ -247,7 +267,14 @@ fn corpus() -> Vec<Vec<u8>> {
 
 #[test]
 fn corpus_all_invariants() {
-    let sizes = [(4usize, 4usize), (4, 8), (8, 16), (16, 64), (32, 32), (50, 200)];
+    let sizes = [
+        (4usize, 4usize),
+        (4, 8),
+        (8, 16),
+        (16, 64),
+        (32, 32),
+        (50, 200),
+    ];
     for data in corpus() {
         for &(min, max) in &sizes {
             check_all(&data, min, max, Mode::Plain);
@@ -276,7 +303,13 @@ fn xorshift_bytes(seed: u64, n: usize) -> Vec<u8> {
 fn large_random_differential() {
     // Large min/max so each search window is big enough to drive the widest
     // SIMD paths (e.g. AVX-512 needs windows > 64 bytes).
-    let configs = [(4usize, 4usize), (64, 256), (256, 1024), (1024, 4096), (4096, 4097)];
+    let configs = [
+        (4usize, 4usize),
+        (64, 256),
+        (256, 1024),
+        (1024, 4096),
+        (4096, 4097),
+    ];
     for seed in 0..8u64 {
         let data = xorshift_bytes(seed.wrapping_add(1), 256 * 1024);
         for &(min, max) in &configs {

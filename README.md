@@ -71,7 +71,8 @@ for seg in CaterpillarChunker::new(&data, 2048, 14336, MinCdcHash4::new()) {
 `CaterpillarChunker::new` is the recommended default. There is also an
 experimental `.with_period_detection(budget)` that catches phase-rotating
 periodic runs the default can't, but it is usually not worth its cost — see
-`examples/CATBENCH_RESULTS.md`.
+`examples/CATBENCH_RESULTS.md`. The caterpillar works on an in-memory slice (it
+wraps `SliceChunker`); there is no streaming (`ReadChunker`) variant yet.
 
 To get the disk-image number, two 200 MiB APFS images were created
 with `hdiutil` (`hdiutil create -size 200m -fs APFS ...`), each holding a real

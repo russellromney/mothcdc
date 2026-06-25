@@ -73,7 +73,7 @@ fn main() -> Result<()> {
     let mut digest_count: HashMap<u64, usize> = HashMap::new();
     let mut total_size = 0;
     for path in paths {
-        let file = File::open(&path)?;
+        let file = File::open(path)?;
         let len = file.metadata()?.len();
         total_size += len;
 

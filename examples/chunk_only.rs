@@ -13,7 +13,7 @@ fn chunk_slice(bytes: &[u8], alg: &str, min_chunk_size: usize, mean_chunk_size: 
             let cdc = MinCdc4::new();
             let max_chunk_size = mean_chunk_size + mean_chunk_size - min_chunk_size;
             let mut chunker = SliceChunker::new(bytes, min_chunk_size, max_chunk_size, cdc);
-            while let Some(chunk) = chunker.next() {
+            for chunk in chunker {
                 std::hint::black_box(chunk[0]);
             }
         },
@@ -21,7 +21,7 @@ fn chunk_slice(bytes: &[u8], alg: &str, min_chunk_size: usize, mean_chunk_size: 
             let cdc = MinCdcHash4::new();
             let max_chunk_size = mean_chunk_size + mean_chunk_size - min_chunk_size;
             let mut chunker = SliceChunker::new(bytes, min_chunk_size, max_chunk_size, cdc);
-            while let Some(chunk) = chunker.next() {
+            for chunk in chunker {
                 std::hint::black_box(chunk[0]);
             }
         },
@@ -34,7 +34,7 @@ fn chunk_slice(bytes: &[u8], alg: &str, min_chunk_size: usize, mean_chunk_size: 
                 mean_chunk_size,
                 max_chunk_size,
             );
-            while let Some(chunk) = chunker.next() {
+            for chunk in chunker {
                 std::hint::black_box(bytes[chunk.offset]);
             }
         },
@@ -49,7 +49,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mean_chunk_size: usize = args[3].parse().unwrap();
     let path = &args[4];
 
-    let mut file = File::open(&path)?;
+    let mut file = File::open(path)?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
 

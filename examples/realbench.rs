@@ -60,7 +60,13 @@ struct Acc {
 }
 impl Acc {
     fn new() -> Self {
-        Self { records: 0, logical: 0, seen: HashMap::new(), sizes: Vec::new(), secs: 0.0 }
+        Self {
+            records: 0,
+            logical: 0,
+            seen: HashMap::new(),
+            sizes: Vec::new(),
+            secs: 0.0,
+        }
     }
     fn add(&mut self, key: u64, stored: usize, logical: usize) {
         self.seen.entry(key).or_insert(stored);
@@ -81,7 +87,11 @@ impl Acc {
                 s[((s.len() as f64 * q) as usize).min(s.len() - 1)]
             }
         };
-        let mean = if self.records > 0 { self.logical / self.records as u64 } else { 0 };
+        let mean = if self.records > 0 {
+            self.logical / self.records as u64
+        } else {
+            0
+        };
         println!(
             "  {name:<18} {gbps:>6.2} GB/s  rec={rec:>8}  uniq={uniq:>8}  dedup={dd:>5.1}%  \
              mean={mean:>6}  p50={p50:>6}  p90={p90:>6}  p99={p99:>6}  max={mx:>7}",

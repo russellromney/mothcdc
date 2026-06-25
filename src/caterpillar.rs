@@ -13,6 +13,9 @@
 //! compare per chunk) on data with no runs, so it keeps mincdc's speed and
 //! deduplication everywhere else. The output is lossless.
 //!
+//! It operates on an in-memory byte slice (it wraps [`SliceChunker`]); there is
+//! no streaming ([`ReadChunker`](crate::ReadChunker)) caterpillar yet.
+//!
 //! # Example
 //! ```
 //! use mincatcdc::{MinCdcHash4, caterpillar::{CaterpillarChunker, Segment}};
@@ -244,7 +247,11 @@ impl<'a, C: Cdc> Iterator for CaterpillarChunker<'a, C> {
         };
         if count >= 2 {
             self.carry = pending;
-            return Some(Segment::Caterpillar { offset: start, unit, count });
+            return Some(Segment::Caterpillar {
+                offset: start,
+                unit,
+                count,
+            });
         }
 
         // Tier 2: gated period detection on the single chunk `first`.
@@ -259,11 +266,11 @@ impl<'a, C: Cdc> Iterator for CaterpillarChunker<'a, C> {
                             run_end = c.offset() + c.len();
                             chunks += 1;
                             nextc = self.inner.next();
-                        }
+                        },
                         other => {
                             self.carry = other;
                             break;
-                        }
+                        },
                     }
                 }
                 if chunks >= 2 {
@@ -335,15 +342,19 @@ mod tests {
                     for _ in 0..*count {
                         rebuilt.extend_from_slice(unit);
                     }
-                }
-                Segment::Periodic { raw_period, total_len, .. } => {
+                },
+                Segment::Periodic {
+                    raw_period,
+                    total_len,
+                    ..
+                } => {
                     let mut written = 0;
                     while written < *total_len {
                         let take = raw_period.len().min(*total_len - written);
                         rebuilt.extend_from_slice(&raw_period[..take]);
                         written += take;
                     }
-                }
+                },
             }
             next_off += s.len();
         }
@@ -372,7 +383,10 @@ mod tests {
         }
         let (plain, simple) = measure("period777 wide [2k,14k]", &data, false);
         let (_, full) = measure("period777 wide [2k,14k]", &data, true);
-        assert!(simple * 20 < plain, "tier 1 already collapses aligned periodic data");
+        assert!(
+            simple * 20 < plain,
+            "tier 1 already collapses aligned periodic data"
+        );
         assert!(full <= simple, "tier 2 must never be worse than tier 1");
     }
 
@@ -389,7 +403,10 @@ mod tests {
         let (plain, simple) = measure_mm("period777 narrow [2k,2.2k]", &data, false, 2048, 2200);
         let (_, full) = measure_mm("period777 narrow [2k,2.2k]", &data, true, 2048, 2200);
 
-        assert!(simple as f64 > plain as f64 * 0.9, "tier 1 cannot coalesce rotations");
+        assert!(
+            simple as f64 > plain as f64 * 0.9,
+            "tier 1 cannot coalesce rotations"
+        );
         assert!(full * 20 < plain, "tier 2 collapses the rotating run");
     }
 

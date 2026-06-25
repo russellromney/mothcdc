@@ -45,7 +45,11 @@ struct Dedup {
 }
 impl Dedup {
     fn new() -> Self {
-        Self { seen: std::collections::HashMap::new(), logical: 0, records: 0 }
+        Self {
+            seen: std::collections::HashMap::new(),
+            logical: 0,
+            records: 0,
+        }
     }
     fn add(&mut self, key: u64, stored_len: usize, logical_len: usize) {
         self.seen.entry(key).or_insert(stored_len);
@@ -76,8 +80,8 @@ fn xorshift(seed: u64, n: usize) -> Vec<u8> {
 /// English-ish low-entropy text: a small word pool joined with spaces.
 fn texty(seed: u64, n: usize) -> Vec<u8> {
     let words: [&[u8]; 16] = [
-        b"the", b"quick", b"brown", b"fox", b"jumps", b"over", b"lazy", b"dog",
-        b"and", b"then", b"runs", b"away", b"into", b"dark", b"deep", b"woods",
+        b"the", b"quick", b"brown", b"fox", b"jumps", b"over", b"lazy", b"dog", b"and", b"then",
+        b"runs", b"away", b"into", b"dark", b"deep", b"woods",
     ];
     let mut s = seed | 1;
     let mut out = Vec::with_capacity(n + 16);
@@ -122,18 +126,28 @@ fn run_fastcdc(data: &[u8], min: usize, avg: usize, max: usize, d: &mut Dedup) -
         let b = &data[c.offset..c.offset + c.length];
         d.add(fnv1a(b), b.len(), b.len());
     }
-    Stats { records, logical: data.len(), gbps }
+    Stats {
+        records,
+        logical: data.len(),
+        gbps,
+    }
 }
 
 fn run_mincdc(data: &[u8], min: usize, max: usize, d: &mut Dedup) -> Stats {
     let cdc = MinCdcHash4::new();
     let (gbps, records) = bench(data.len(), || {
-        SliceChunker::new(data, min, max, cdc).map(|c| std::hint::black_box(c.offset())).count()
+        SliceChunker::new(data, min, max, cdc)
+            .map(|c| std::hint::black_box(c.offset()))
+            .count()
     });
     for c in SliceChunker::new(data, min, max, cdc) {
         d.add(fnv1a(&c), c.len(), c.len());
     }
-    Stats { records, logical: data.len(), gbps }
+    Stats {
+        records,
+        logical: data.len(),
+        gbps,
+    }
 }
 
 fn run_caterpillar(data: &[u8], min: usize, max: usize, full: bool, d: &mut Dedup) -> Stats {
@@ -151,11 +165,19 @@ fn run_caterpillar(data: &[u8], min: usize, max: usize, full: bool, d: &mut Dedu
     for s in make(full) {
         d.add(fnv1a(s.dedup_key()), s.dedup_key().len(), s.len());
     }
-    Stats { records, logical: data.len(), gbps }
+    Stats {
+        records,
+        logical: data.len(),
+        gbps,
+    }
 }
 
 fn row(name: &str, s: &Stats, d: &Dedup) {
-    let mean = if s.records > 0 { s.logical / s.records } else { 0 };
+    let mean = if s.records > 0 {
+        s.logical / s.records
+    } else {
+        0
+    };
     println!(
         "  {name:<18} {gbps:>7.2} GB/s  records={rec:>7}  mean={mean:>6}  uniq={uniq:>7}  dedup={dd:>5.1}%",
         gbps = s.gbps,
@@ -176,7 +198,10 @@ fn scenario_versioned(min: usize, avg: usize, max: usize) {
     v2.extend_from_slice(&xorshift(999, 5000)); // inserted edit
     v2.extend_from_slice(&v1[cut..]);
     let total = v1.len() + v2.len();
-    println!("\n=== versioned (v1 + v2-with-insert)  ({} MiB total) ===", total / (1024 * 1024));
+    println!(
+        "\n=== versioned (v1 + v2-with-insert)  ({} MiB total) ===",
+        total / (1024 * 1024)
+    );
 
     // fastcdc
     let mut d = Dedup::new();
@@ -186,7 +211,13 @@ fn scenario_versioned(min: usize, avg: usize, max: usize) {
             d.add(fnv1a(b), b.len(), b.len());
         }
     }
-    println!("  {:<18} records={:>7}  uniq={:>7}  dedup={:>5.1}%", "fastcdc-v2020", d.records, d.unique(), d.dedup_pct());
+    println!(
+        "  {:<18} records={:>7}  uniq={:>7}  dedup={:>5.1}%",
+        "fastcdc-v2020",
+        d.records,
+        d.unique(),
+        d.dedup_pct()
+    );
 
     // mincdc plain
     let cdc = MinCdcHash4::new();
@@ -196,7 +227,13 @@ fn scenario_versioned(min: usize, avg: usize, max: usize) {
             d.add(fnv1a(&c), c.len(), c.len());
         }
     }
-    println!("  {:<18} records={:>7}  uniq={:>7}  dedup={:>5.1}%", "mincdc-plain", d.records, d.unique(), d.dedup_pct());
+    println!(
+        "  {:<18} records={:>7}  uniq={:>7}  dedup={:>5.1}%",
+        "mincdc-plain",
+        d.records,
+        d.unique(),
+        d.dedup_pct()
+    );
 
     // mincdc + cat-period
     let mut d = Dedup::new();
@@ -205,7 +242,13 @@ fn scenario_versioned(min: usize, avg: usize, max: usize) {
             d.add(fnv1a(s.dedup_key()), s.dedup_key().len(), s.len());
         }
     }
-    println!("  {:<18} records={:>7}  uniq={:>7}  dedup={:>5.1}%", "mincdc+cat-period", d.records, d.unique(), d.dedup_pct());
+    println!(
+        "  {:<18} records={:>7}  uniq={:>7}  dedup={:>5.1}%",
+        "mincdc+cat-period",
+        d.records,
+        d.unique(),
+        d.dedup_pct()
+    );
 }
 
 fn main() {
@@ -257,7 +300,10 @@ fn run_suite(min: usize, avg: usize, mc_max: usize, fast_max: usize, n: usize) {
             data.extend_from_slice(&p);
         }
         let (nmin, nmax) = (2048usize, 2200usize);
-        println!("\n=== periodic-777 (NARROW win min={nmin} max={nmax})  ({} MiB) ===", data.len() / (1024 * 1024));
+        println!(
+            "\n=== periodic-777 (NARROW win min={nmin} max={nmax})  ({} MiB) ===",
+            data.len() / (1024 * 1024)
+        );
         let mut d = Dedup::new();
         let s = run_fastcdc(&data, nmin, 2100, nmax, &mut d);
         row("fastcdc-v2020", &s, &d);
