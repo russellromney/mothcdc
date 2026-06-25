@@ -14,7 +14,7 @@ deduplicated.
 To start using `mincatcdc` add the following to your `Cargo.toml`:
 
     [dependencies]
-    mincatcdc = "0.2"
+    mincatcdc = "0.4"
 
 Please refer to [the documentation](https://docs.rs/mincatcdc) for more
 information on usage.
