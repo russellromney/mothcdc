@@ -15,8 +15,11 @@
 //!
 //! [`CaterpillarChunker`] works on an in-memory byte slice (it wraps
 //! [`SliceChunker`]). For inputs larger than memory, [`CaterpillarReadChunker`]
-//! does the same coalescing over a streaming [`ReadChunker`] in bounded space
-//! (tier 1 only; it yields owned [`OwnedSegment`]s).
+//! does the same coalescing over a streaming [`ReadChunker`] in bounded memory,
+//! yielding borrowed [`Segment`]s (valid until the next call, like
+//! [`ReadChunker::next`](crate::ReadChunker)). It is tier 1 only and never
+//! copies; a run longer than the internal buffer is emitted as several segments
+//! rather than one (still far fewer records than one-per-chunk).
 //!
 //! # Example
 //! ```
@@ -42,7 +45,7 @@
 
 use std::io::{self, Read};
 
-use crate::{Cdc, Chunk, ReadChunker, SliceChunker};
+use crate::{Cdc, Chunk, SliceChunker};
 
 /// Largest period (bytes) tier-2 detection will look for. Bounds the gate scan
 /// and keeps the common (random) path cheap.
@@ -300,157 +303,164 @@ impl<'a, C: Cdc> Iterator for CaterpillarChunker<'a, C> {
     }
 }
 
-/// One output unit of [`CaterpillarReadChunker`] — like [`Segment`] but it owns
-/// its bytes, because the streaming reader reuses its buffer.
-#[derive(Clone, Debug)]
-pub enum OwnedSegment {
-    /// A single chunk whose neighbor differed.
-    Solo {
-        /// Start offset within the stream.
-        offset: usize,
-        /// The chunk's bytes.
-        bytes: Vec<u8>,
-    },
-    /// A run of `count` (>= 2) byte-identical adjacent chunks.
-    Caterpillar {
-        /// Start offset within the stream.
-        offset: usize,
-        /// The repeated chunk's bytes.
-        unit: Vec<u8>,
-        /// Number of times `unit` repeats (>= 2).
-        count: usize,
-    },
-}
-
-impl OwnedSegment {
-    /// Start offset within the stream.
-    pub fn offset(&self) -> usize {
-        match self {
-            OwnedSegment::Solo { offset, .. } | OwnedSegment::Caterpillar { offset, .. } => *offset,
-        }
-    }
-
-    /// Number of underlying chunks represented (1 for [`OwnedSegment::Solo`]).
-    pub fn chunk_count(&self) -> usize {
-        match self {
-            OwnedSegment::Solo { .. } => 1,
-            OwnedSegment::Caterpillar { count, .. } => *count,
-        }
-    }
-
-    /// Total number of bytes covered.
-    pub fn len(&self) -> usize {
-        match self {
-            OwnedSegment::Solo { bytes, .. } => bytes.len(),
-            OwnedSegment::Caterpillar { unit, count, .. } => unit.len() * count,
-        }
-    }
-
-    /// Whether this segment covers zero bytes (never true in practice).
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// The unique bytes to fingerprint/store — see [`Segment::dedup_key`]. Tiling
-    /// these to [`len`](Self::len) reconstructs the segment losslessly.
-    pub fn dedup_key(&self) -> &[u8] {
-        match self {
-            OwnedSegment::Solo { bytes, .. } => bytes,
-            OwnedSegment::Caterpillar { unit, .. } => unit,
-        }
-    }
-
-    /// Appends this segment's original bytes to `out` (tiles `dedup_key` to `len`).
-    pub fn reconstruct_into(&self, out: &mut Vec<u8>) {
-        let key = self.dedup_key();
-        let total = self.len();
-        let mut written = 0;
-        while written < total {
-            let take = key.len().min(total - written);
-            out.extend_from_slice(&key[..take]);
-            written += take;
-        }
-    }
-}
-
-/// In-progress run of byte-identical chunks held by [`CaterpillarReadChunker`].
-struct Run {
-    offset: usize,
-    unit: Vec<u8>,
-    count: usize,
-}
-
-impl Run {
-    fn into_segment(self) -> OwnedSegment {
-        if self.count >= 2 {
-            OwnedSegment::Caterpillar {
-                offset: self.offset,
-                unit: self.unit,
-                count: self.count,
-            }
-        } else {
-            OwnedSegment::Solo {
-                offset: self.offset,
-                bytes: self.unit,
-            }
-        }
-    }
-}
-
-/// Streaming caterpillar over a [`Read`]: like [`CaterpillarChunker`] but driven
-/// by [`ReadChunker`], so it chunks inputs **larger than memory** in bounded
-/// space (it never loads the whole input).
+/// Streaming caterpillar: [`CaterpillarChunker`] for a [`Read`] source.
 ///
-/// It run-length-encodes byte-identical adjacent chunks (tier 1 only — there is
-/// no period detection in the streaming path). Because the underlying reader
-/// reuses its buffer, outputs are [`OwnedSegment`]s that own their bytes. Only
-/// the current run's unit (one chunk) is copied and held, so peak memory is the
-/// reader's buffer plus one chunk, regardless of how large the input is.
+/// It coalesces byte-identical adjacent chunks *inside* the reader's buffer and
+/// yields **borrowed** [`Segment`]s valid only until the next call (the same
+/// contract as [`ReadChunker::next`](crate::ReadChunker)) — so it never copies
+/// and runs in bounded memory, working on inputs larger than RAM.
+///
+/// A run longer than the internal buffer is emitted as several segments instead
+/// of one (still far fewer records than one-per-chunk, and every segment's
+/// [`dedup_key`](Segment::dedup_key) is content-defined, so they dedup to one
+/// stored blob). Where those splits land depends on the reader's `read()` sizes,
+/// so the *record grouping* is not reproducible across readers — but the stored
+/// content is, which is what content-addressed dedup relies on. Tier 1 only
+/// (no period detection in the streaming path).
 pub struct CaterpillarReadChunker<R, C> {
-    inner: ReadChunker<R, C>,
-    run: Option<Run>,
+    min_size: usize,
+    max_size: usize,
+    cdc: C,
+    reader: R,
+    buf: Vec<u8>,
+    buf_offset: usize,
+    unread: usize,
+    stream_offset: usize,
+    eof: bool,
+    done: bool,
+    /// Length of the chunk at `buf_offset` if already computed by a previous
+    /// call's lookahead — avoids recomputing the boundary (a SIMD scan) twice.
+    pending_len: Option<usize>,
 }
 
 impl<R, C: Cdc> CaterpillarReadChunker<R, C> {
-    /// Creates a streaming caterpillar chunker.
+    /// Creates a zero-copy streaming caterpillar chunker.
     pub fn new(reader: R, min_size: usize, max_size: usize, cdc: C) -> Self {
+        assert!(min_size <= max_size && max_size > 0);
+        let buf_size = crate::MIN_BUFFER_SIZE + (max_size + 1) + min_size * 4;
         Self {
-            inner: ReadChunker::new(reader, min_size, max_size, cdc),
-            run: None,
+            min_size,
+            max_size,
+            cdc,
+            reader,
+            buf: vec![0; buf_size],
+            buf_offset: 0,
+            unread: 0,
+            stream_offset: 0,
+            eof: false,
+            done: false,
+            pending_len: None,
         }
+    }
+
+    /// Length of the chunk starting at buffer position `p` given `avail` buffered
+    /// bytes from there, or `None` if it can't be decided without more data.
+    /// Mirrors `ReadChunker`'s boundary logic exactly.
+    fn chunk_len(&self, p: usize, avail: usize) -> Option<usize> {
+        if avail == 0 {
+            return None;
+        }
+        if !self.eof && avail < self.max_size + 1 {
+            return None;
+        }
+        if avail <= self.min_size {
+            return Some(avail); // final short chunk (EOF tail)
+        }
+        let start_search = self.min_size.saturating_sub(self.cdc.window_size());
+        let stop = self.max_size.min(avail);
+        let search = &self.buf[p + start_search..p + stop];
+        Some(start_search + self.cdc.best_splitpoint(search))
     }
 }
 
 impl<R: Read, C: Cdc> CaterpillarReadChunker<R, C> {
-    /// Gets the next [`OwnedSegment`], or [`None`] at end of input.
+    /// Reads/shifts until at least `max_size + 1` bytes are buffered (or EOF).
+    /// Only ever called at a run boundary, when no segment borrow is live.
+    fn ensure(&mut self) -> io::Result<()> {
+        let need = self.max_size + 1;
+        while !self.eof && self.unread < need {
+            if self.buf.len() - self.buf_offset < need {
+                self.buf
+                    .copy_within(self.buf_offset..self.buf_offset + self.unread, 0);
+                self.buf_offset = 0;
+            }
+            let n = self
+                .reader
+                .read(&mut self.buf[self.buf_offset + self.unread..])?;
+            if n == 0 {
+                self.eof = true;
+                break;
+            }
+            self.unread += n;
+        }
+        Ok(())
+    }
+
+    /// Gets the next [`Segment`] (borrowed, valid until the next call), or `None`.
     #[allow(clippy::should_implement_trait)]
-    pub fn next(&mut self) -> io::Result<Option<OwnedSegment>> {
+    pub fn next(&mut self) -> io::Result<Option<Segment<'_>>> {
+        if self.done {
+            return Ok(None);
+        }
+        self.ensure()?;
+        if self.unread == 0 {
+            self.done = true;
+            return Ok(None);
+        }
+
+        let base = self.buf_offset;
+        let base_stream = self.stream_offset;
+        // Reuse the boundary the previous call already computed, if any.
+        let unit_len = match self.pending_len.take() {
+            Some(l) => l,
+            None => self
+                .chunk_len(base, self.unread)
+                .expect("buffer was ensured but the first chunk could not be decided"),
+        };
+
+        // Coalesce identical adjacent chunks within the buffered region (no refill
+        // mid-run, so the unit borrow stays valid).
+        let mut run_len = unit_len;
+        let mut count = 1usize;
         loop {
-            match self.inner.next()? {
-                // End of input: flush the final run, if any.
-                None => return Ok(self.run.take().map(Run::into_segment)),
-                Some(c) => {
-                    // Exact byte compare against the run's owned unit — lossless,
-                    // no hash-collision risk.
-                    let same = matches!(&self.run, Some(r) if r.unit.as_slice() == &c[..]);
-                    if same {
-                        self.run.as_mut().unwrap().count += 1;
-                    } else {
-                        // Boundary: flush the old run and start a new one. Copy
-                        // this chunk (the only chunk-sized allocation we hold).
-                        let flushed = self.run.take().map(Run::into_segment);
-                        self.run = Some(Run {
-                            offset: c.offset(),
-                            unit: c.to_vec(),
-                            count: 1,
-                        });
-                        if let Some(seg) = flushed {
-                            return Ok(Some(seg));
-                        }
-                    }
+            let cur = base + run_len;
+            let avail = self.unread - run_len;
+            match self.chunk_len(cur, avail) {
+                Some(nl)
+                    if nl == unit_len
+                        && self.buf[cur..cur + nl] == self.buf[base..base + unit_len] =>
+                {
+                    count += 1;
+                    run_len += nl;
+                },
+                // Next chunk differs: stash its already-computed length so the
+                // next call doesn't recompute the boundary.
+                Some(nl) => {
+                    self.pending_len = Some(nl);
+                    break;
+                },
+                // Can't decide without a refill: recompute next call.
+                None => {
+                    self.pending_len = None;
+                    break;
                 },
             }
         }
+
+        self.buf_offset += run_len;
+        self.unread -= run_len;
+        self.stream_offset += run_len;
+
+        let seg = if count >= 2 {
+            Segment::Caterpillar {
+                offset: base_stream,
+                unit: &self.buf[base..base + unit_len],
+                count,
+            }
+        } else {
+            Segment::Solo(Chunk::new(&self.buf[base..base + unit_len], base_stream))
+        };
+        Ok(Some(seg))
     }
 }
 

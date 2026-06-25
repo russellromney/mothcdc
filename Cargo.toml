@@ -1,6 +1,6 @@
 [package]
 name = "mincatcdc"
-version = "0.4.3"
+version = "0.5.0"
 authors = ["Orson Peters <orsonpeters@gmail.com>", "Russell Romney"]
 license = "Zlib"
 repository = "https://github.com/russellromney/mincatcdc"

@@ -73,7 +73,8 @@ experimental `.with_period_detection(budget)` that catches phase-rotating
 periodic runs the default can't, but it is usually not worth its cost — see
 `examples/CATBENCH_RESULTS.md`. `CaterpillarChunker` works on an in-memory slice;
 for inputs larger than memory, `CaterpillarReadChunker` does the same coalescing
-over a streaming reader in bounded space (tier 1 only, yielding owned segments).
+over a streaming reader in bounded memory — zero-copy (it yields borrowed
+`Segment`s valid until the next call, like `ReadChunker`), tier 1 only.
 
 To get the disk-image number, two 200 MiB APFS images were created
 with `hdiutil` (`hdiutil create -size 200m -fs APFS ...`), each holding a real

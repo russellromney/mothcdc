@@ -66,7 +66,7 @@ const MIN_BUFFER_SIZE: usize = 1024 * 1024 * 4;
 
 /// Caterpillar coalescing layer: metadata efficiency on redundant data.
 pub mod caterpillar;
-pub use caterpillar::{CaterpillarChunker, CaterpillarReadChunker, OwnedSegment, Segment};
+pub use caterpillar::{CaterpillarChunker, CaterpillarReadChunker, Segment};
 
 pub(crate) mod scalar;
 

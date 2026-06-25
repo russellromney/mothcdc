@@ -154,35 +154,73 @@ fn roundtrip_offphase_periodic_with_detection() {
     assert_roundtrip("offphase-period", &data, 2048, 2200, Some(usize::MAX));
 }
 
+/// A reader that returns at most `step` bytes per call, to exercise the streaming
+/// chunker's buffer refill/shift logic (and its reader-dependent run splitting).
+struct ChokedReader<'a> {
+    data: &'a [u8],
+    pos: usize,
+    step: usize,
+}
+impl std::io::Read for ChokedReader<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.step.min(buf.len()).min(self.data.len() - self.pos);
+        buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+        self.pos += n;
+        Ok(n)
+    }
+}
+
+/// Drives the streaming caterpillar over `reader`, asserting contiguity, lossless
+/// reconstruction, exact coverage, and that it represents the same underlying
+/// chunk count as plain mincdc. (It is NOT asserted to match the slice
+/// caterpillar's segment grouping — the streaming version splits long runs at
+/// buffer boundaries, which depends on the reader.)
+fn assert_stream_roundtrip<R: std::io::Read>(
+    tag: &str,
+    reader: R,
+    data: &[u8],
+    min: usize,
+    max: usize,
+) {
+    let cdc = MinCdcHash4::new();
+    let plain = SliceChunker::new(data, min, max, cdc).count();
+    let mut rc = CaterpillarReadChunker::new(reader, min, max, cdc);
+    let (mut next_off, mut chunks) = (0usize, 0usize);
+    let mut rebuilt = Vec::with_capacity(data.len());
+    while let Some(s) = rc.next().unwrap() {
+        assert_eq!(s.offset(), next_off, "{tag}: non-contiguous");
+        assert!(!s.is_empty(), "{tag}: empty segment");
+        chunks += s.chunk_count();
+        next_off += s.len();
+        s.reconstruct_into(&mut rebuilt);
+    }
+    assert_eq!(rebuilt, data, "{tag}: stream round-trip corrupted data");
+    assert_eq!(next_off, data.len(), "{tag}: coverage gap");
+    assert_eq!(
+        chunks, plain,
+        "{tag}: chunk_count {chunks} != plain {plain}"
+    );
+}
+
 #[test]
-fn streaming_caterpillar_matches_slice_and_roundtrips() {
-    // The streaming (bounded-memory) caterpillar must produce exactly the same
-    // segments as the in-memory tier-1 caterpillar, and round-trip losslessly.
+fn streaming_caterpillar_roundtrips() {
     for (name, data) in corpora() {
         for (min, max) in [(2048usize, 14336usize), (2048, 2200), (64, 256)] {
-            let cdc = MinCdcHash4::new();
-            // In-memory tier-1: (offset, dedup_key bytes, chunk_count).
-            let slice: Vec<(usize, Vec<u8>, usize)> = CaterpillarChunker::new(&data, min, max, cdc)
-                .map(|s| (s.offset(), s.dedup_key().to_vec(), s.chunk_count()))
-                .collect();
-
-            // Streaming over a reader, and reconstruct from the owned segments.
-            let mut rc = CaterpillarReadChunker::new(Cursor::new(&data), min, max, cdc);
-            let mut stream = Vec::new();
-            let mut rebuilt = Vec::with_capacity(data.len());
-            while let Some(s) = rc.next().unwrap() {
-                stream.push((s.offset(), s.dedup_key().to_vec(), s.chunk_count()));
-                s.reconstruct_into(&mut rebuilt);
-            }
-
-            assert_eq!(
-                slice, stream,
-                "{name} (min={min} max={max}): stream != slice"
+            // One big read (Cursor) and a hostile 1-byte reader — the run splits
+            // land differently, but both must be lossless and fully cover.
+            assert_stream_roundtrip(
+                &format!("{name}/cursor"),
+                Cursor::new(&data),
+                &data,
+                min,
+                max,
             );
-            assert_eq!(
-                rebuilt, data,
-                "{name} (min={min} max={max}): stream round-trip corrupt"
-            );
+            let choked = ChokedReader {
+                data: &data,
+                pos: 0,
+                step: 1,
+            };
+            assert_stream_roundtrip(&format!("{name}/choked"), choked, &data, min, max);
         }
     }
 }
@@ -201,5 +239,19 @@ proptest! {
         period in proptest::option::of(0usize..100_000),
     ) {
         assert_roundtrip("prop", &data, min, min + extra, period);
+    }
+
+    /// Fuzz the streaming caterpillar over random data, sizes, and reader chunk
+    /// sizes — asserts lossless reconstruction, full coverage, and same chunk
+    /// count as plain mincdc regardless of how the reader fragments input.
+    #[test]
+    fn prop_streaming_caterpillar_roundtrip(
+        data in proptest::collection::vec(any::<u8>(), 0..8192),
+        min in 16usize..512,
+        extra in 0usize..512,
+        step in 1usize..4096,
+    ) {
+        let choked = ChokedReader { data: &data, pos: 0, step };
+        assert_stream_roundtrip("prop-stream", choked, &data, min, min + extra);
     }
 }
