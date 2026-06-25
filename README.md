@@ -30,10 +30,6 @@ and over — mincdc cuts it into a flood of tiny chunks. Each chunk is a record 
 have to store and track. The bytes dedupe down to almost nothing, but you still
 keep every record: a mostly-empty 200 MiB disk image becomes ~182,000 of them.
 
-(This is mincdc's behavior, not every chunker's. FastCDC does the opposite on
-such a run — a few oversized chunks — but either way a long run costs you
-metadata.)
-
 The caterpillar is a small, lossless pass over the chunk stream
 that collapses any run of byte-identical adjacent chunks into a single record
 with a repeat count. On that disk image: **182,701 → 7,798 records (−96%)**, with
