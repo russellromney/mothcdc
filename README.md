@@ -37,16 +37,13 @@ no change to what is stored and no preprocessing required. On normal data it doe
 nothing and costs nothing (it is a no-op when there are no runs), so it keeps
 mincdc's speed and deduplication everywhere else.
 
-**Speed.** The caterpillar adds at most a few percent over plain mincdc — within
-noise on data with no runs, up to ~8% slower on heavily-redundant data (the cost
-of the coalescing that earns the −96% records), and sometimes faster (fewer
-records to emit). mincdc is several times faster than FastCDC to begin with
-(~5× on typical data, and still ahead even on a mostly-zero disk image), so
-mincatcdc stays well clear of FastCDC throughout.
-
 The caterpillar idea comes from the [Chonkers
 algorithm](https://arxiv.org/abs/2509.11121) (Berger, 2025), which calls a
 periodic run a *caterpillar*.
+
+On speed, the caterpillar is within a few percent of plain mincdc (often free,
+~8% slower at worst on heavily-redundant data, sometimes faster), and mincdc is
+already several times faster than FastCDC.
 
 The output: metadata-efficient CDC
 on redundant data without writing any domain-specific preprocessing (zero
