@@ -16,11 +16,15 @@ Packed-scanning caterpillar fast path (VectorCDC-style SIMD).
   word-at-a-time scalar fallback.
 - Applies to both `CaterpillarChunker` and `CaterpillarReadChunker`. Output is
   bit-identical to 0.5.0 (same segments, same grouping, same bytes).
-- Criterion bench (`cargo bench`, Apple M-series/NEON, min=2048 max=14336):
-  zeros 1.78 → 30.2 GiB/s, periodic-777 2.03 → 27.5 GiB/s, random+zero-hole
-  2.96 → 13.3 GiB/s, random unchanged (~8.3 GiB/s). The caterpillar previously
-  cost up to ~8% on redundant data; it is now 13–15x faster than plain mincdc
-  there.
+- Criterion bench (`cargo bench`, min=2048 max=14336), caterpillar 0.5 → 0.6:
+  - Apple M-series (NEON): zeros 1.78 → 30.2 GiB/s, periodic-777 2.03 → 27.5
+    GiB/s, random+zero-hole 2.96 → 13.3 GiB/s, random unchanged (~8.3 GiB/s).
+  - Intel Xeon w/ AVX-512BW (dedicated Fly performance-4x): zeros 2.41 → 74.3
+    GiB/s, periodic-777 2.54 → 22.9 GiB/s, random+zero-hole 3.51 → 13.8 GiB/s,
+    random unchanged (~10.2 GiB/s).
+
+  The caterpillar previously cost up to ~8% on redundant data; it is now
+  9–30x faster than plain mincdc there.
 - Tests: a `packed_repeats` soundness test against the real boundary search as
   oracle (break position swept over every byte at every alignment), a
   segment-stream differential against the pre-SIMD caterpillar (adversarial
