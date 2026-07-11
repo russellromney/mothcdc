@@ -68,6 +68,10 @@ const MIN_BUFFER_SIZE: usize = 1024 * 1024 * 4;
 pub mod caterpillar;
 pub use caterpillar::{CaterpillarChunker, CaterpillarReadChunker, Segment};
 
+/// C API for embedding in external benchmark harnesses (feature `capi`).
+#[cfg(feature = "capi")]
+pub mod capi;
+
 pub(crate) mod scalar;
 
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]

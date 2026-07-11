@@ -79,7 +79,7 @@ use crate::{Cdc, Chunk, SliceChunker, simd};
 /// only ever *pre-pays* boundary decisions that Phase 1 would provably make,
 /// so the caller resumes the ordinary per-chunk loop at `(1 + repeats) * u` as
 /// if those chunks had been computed one by one.
-fn packed_repeats(tail: &[u8], u: usize, max_size: usize) -> usize {
+pub(crate) fn packed_repeats(tail: &[u8], u: usize, max_size: usize) -> usize {
     let n = tail.len();
     if u == 0 || u >= n {
         return 0;
