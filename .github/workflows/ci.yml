@@ -41,7 +41,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: petarpetrovt/setup-sde@v2.4
+      # v5.0 installs SDE 10.8.0. SDE 9.33 (the v2.4 default) predates current
+      # rustc codegen and SIGSEGVs on binaries that run fine on real AVX-512
+      # hardware and under SDE 10.8.0 (verified on an Intel Xeon w/ avx512bw).
+      - uses: petarpetrovt/setup-sde@v5.0
       - name: Build tests
         run: cargo test --release --no-run
       - name: cross-impl determinism under emulated AVX-512 (Sapphire Rapids)
