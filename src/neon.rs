@@ -87,3 +87,64 @@ pub fn argmin_u32_overlapping_hashed<const SHOULD_HASH: bool>(
         min_offset_base + min_offset_inc
     }
 }
+
+// ---------------------------------------------------------------------------
+// Packed scanning (VectorCDC-style) primitives for the caterpillar fast path.
+// See src/x86_64.rs for the full description; the NEON versions differ only in
+// how the "all lanes equal?" test and mismatch position are extracted, since
+// NEON has no movemask: `vminvq_u8` of the comparison is 0xFF iff every lane
+// matched, and on a mismatch `vshrn` narrows the comparison to a 64-bit mask
+// with 4 bits per byte, whose trailing ones locate the first differing byte.
+// ---------------------------------------------------------------------------
+
+/// Index of the first lane of `eq` (a `vceqq_u8` result) that is not all-ones.
+/// Must only be called when at least one lane mismatched.
+#[inline(always)]
+unsafe fn first_mismatch_lane(eq: std::arch::aarch64::uint8x16_t) -> usize {
+    use std::arch::aarch64::*;
+    unsafe {
+        let nib = vshrn_n_u16::<4>(vreinterpretq_u16_u8(eq));
+        let mask = vget_lane_u64::<0>(vreinterpret_u64_u8(nib));
+        (mask.trailing_ones() / 4) as usize
+    }
+}
+
+/// Length of the common prefix of `a` and `b` (compared over the shorter one).
+pub fn common_prefix_len(a: &[u8], b: &[u8]) -> usize {
+    use std::arch::aarch64::*;
+
+    let n = a.len().min(b.len());
+    let mut i = 0;
+    unsafe {
+        while i + 16 <= n {
+            let va = vld1q_u8(a.as_ptr().add(i));
+            let vb = vld1q_u8(b.as_ptr().add(i));
+            let eq = vceqq_u8(va, vb);
+            if vminvq_u8(eq) != 0xFF {
+                return i + first_mismatch_lane(eq);
+            }
+            i += 16;
+        }
+    }
+    i + scalar::common_prefix_len(&a[i..n], &b[i..n])
+}
+
+/// Length of the prefix of `data` consisting entirely of `byte`.
+pub fn byte_run_len(data: &[u8], byte: u8) -> usize {
+    use std::arch::aarch64::*;
+
+    let n = data.len();
+    let mut i = 0;
+    unsafe {
+        let needle = vdupq_n_u8(byte);
+        while i + 16 <= n {
+            let v = vld1q_u8(data.as_ptr().add(i));
+            let eq = vceqq_u8(v, needle);
+            if vminvq_u8(eq) != 0xFF {
+                return i + first_mismatch_lane(eq);
+            }
+            i += 16;
+        }
+    }
+    i + scalar::byte_run_len(&data[i..], byte)
+}

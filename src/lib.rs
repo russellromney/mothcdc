@@ -424,6 +424,37 @@ mod test {
         }
     }
 
+    // The dispatched packed-scan primitives (whatever SIMD width this target
+    // compiled in) must agree with the scalar reference for every size and
+    // every mismatch position, including inside the sub-vector tail.
+    #[test]
+    fn test_packed_scan_matches_scalar() {
+        for size in 0..600usize {
+            let rng = SmallRng::seed_from_u64(size as u64);
+            let a: Vec<u8> = rng.sample_iter(StandardUniform).take(size).collect();
+            for p in 0..=size {
+                let mut b = a.clone();
+                if p < size {
+                    b[p] ^= 0x5A;
+                }
+                let want = p.min(size);
+                assert_eq!(scalar::common_prefix_len(&a, &b), want, "scalar {size}/{p}");
+                assert_eq!(simd::common_prefix_len(&a, &b), want, "simd {size}/{p}");
+
+                let mut run = vec![0x77u8; size];
+                if p < size {
+                    run[p] = 0;
+                }
+                assert_eq!(
+                    scalar::byte_run_len(&run, 0x77),
+                    want,
+                    "scalar run {size}/{p}"
+                );
+                assert_eq!(simd::byte_run_len(&run, 0x77), want, "simd run {size}/{p}");
+            }
+        }
+    }
+
     #[test]
     fn test_read_slice_equiv() {
         let bounds = [1, 2, 3, 4, 6, 8, 15, 27, 62, 90, 120, 200];

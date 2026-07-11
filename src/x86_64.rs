@@ -308,6 +308,171 @@ pub fn argmin_u32_overlapping_hashed<const SHOULD_HASH: bool>(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Packed scanning (VectorCDC-style) primitives for the caterpillar fast path.
+//
+// `common_prefix_len` answers "how far do these two regions stay byte-
+// identical?" and `byte_run_len` answers "how far does this region stay a
+// single repeated byte?". Both are packed equality scans: load a whole vector,
+// compare all lanes at once (`cmpeq`), collapse to a bitmask (`movemask` /
+// AVX-512 mask registers), and only leave the loop when a lane mismatches —
+// the position of the first zero bit in the mask is the answer.
+//
+// All loads are unaligned (`loadu`) and bounded by `i + WIDTH <= n`, so the
+// scans never read past the end of a streaming buffer; the sub-vector tail is
+// finished by the scalar (word-at-a-time) reference.
+// ---------------------------------------------------------------------------
+
+/// # Safety
+/// AVX-512BW must be available.
+#[target_feature(enable = "avx512bw")]
+unsafe fn common_prefix_len_avx512(a: &[u8], b: &[u8]) -> usize {
+    let n = a.len().min(b.len());
+    let mut i = 0;
+    unsafe {
+        while i + 64 <= n {
+            let va = _mm512_loadu_si512(a.as_ptr().add(i).cast());
+            let vb = _mm512_loadu_si512(b.as_ptr().add(i).cast());
+            let eq = _mm512_cmpeq_epi8_mask(va, vb);
+            if eq != u64::MAX {
+                return i + (!eq).trailing_zeros() as usize;
+            }
+            i += 64;
+        }
+    }
+    i + scalar::common_prefix_len(&a[i..n], &b[i..n])
+}
+
+/// # Safety
+/// AVX-512BW must be available.
+#[target_feature(enable = "avx512bw")]
+unsafe fn byte_run_len_avx512(data: &[u8], byte: u8) -> usize {
+    let n = data.len();
+    let needle = _mm512_set1_epi8(byte as i8);
+    let mut i = 0;
+    unsafe {
+        while i + 64 <= n {
+            let v = _mm512_loadu_si512(data.as_ptr().add(i).cast());
+            let eq = _mm512_cmpeq_epi8_mask(v, needle);
+            if eq != u64::MAX {
+                return i + (!eq).trailing_zeros() as usize;
+            }
+            i += 64;
+        }
+    }
+    i + scalar::byte_run_len(&data[i..], byte)
+}
+
+/// # Safety
+/// AVX2 must be available.
+#[target_feature(enable = "avx2")]
+unsafe fn common_prefix_len_avx2(a: &[u8], b: &[u8]) -> usize {
+    let n = a.len().min(b.len());
+    let mut i = 0;
+    unsafe {
+        while i + 32 <= n {
+            let va = _mm256_loadu_si256(a.as_ptr().add(i).cast());
+            let vb = _mm256_loadu_si256(b.as_ptr().add(i).cast());
+            let mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(va, vb)) as u32;
+            if mask != u32::MAX {
+                return i + (!mask).trailing_zeros() as usize;
+            }
+            i += 32;
+        }
+    }
+    i + scalar::common_prefix_len(&a[i..n], &b[i..n])
+}
+
+/// # Safety
+/// AVX2 must be available.
+#[target_feature(enable = "avx2")]
+unsafe fn byte_run_len_avx2(data: &[u8], byte: u8) -> usize {
+    let n = data.len();
+    let needle = _mm256_set1_epi8(byte as i8);
+    let mut i = 0;
+    unsafe {
+        while i + 32 <= n {
+            let v = _mm256_loadu_si256(data.as_ptr().add(i).cast());
+            let mask = _mm256_movemask_epi8(_mm256_cmpeq_epi8(v, needle)) as u32;
+            if mask != u32::MAX {
+                return i + (!mask).trailing_zeros() as usize;
+            }
+            i += 32;
+        }
+    }
+    i + scalar::byte_run_len(&data[i..], byte)
+}
+
+// SSE2 is part of the x86_64 baseline, so these need no feature detection and
+// serve as the dispatch floor (there is no scalar entry in the tables below).
+
+fn common_prefix_len_sse2(a: &[u8], b: &[u8]) -> usize {
+    let n = a.len().min(b.len());
+    let mut i = 0;
+    unsafe {
+        while i + 16 <= n {
+            let va = _mm_loadu_si128(a.as_ptr().add(i).cast());
+            let vb = _mm_loadu_si128(b.as_ptr().add(i).cast());
+            let mask = _mm_movemask_epi8(_mm_cmpeq_epi8(va, vb)) as u32;
+            if mask != 0xFFFF {
+                return i + (!mask).trailing_zeros() as usize;
+            }
+            i += 16;
+        }
+    }
+    i + scalar::common_prefix_len(&a[i..n], &b[i..n])
+}
+
+fn byte_run_len_sse2(data: &[u8], byte: u8) -> usize {
+    let n = data.len();
+    let mut i = 0;
+    unsafe {
+        let needle = _mm_set1_epi8(byte as i8);
+        while i + 16 <= n {
+            let v = _mm_loadu_si128(data.as_ptr().add(i).cast());
+            let mask = _mm_movemask_epi8(_mm_cmpeq_epi8(v, needle)) as u32;
+            if mask != 0xFFFF {
+                return i + (!mask).trailing_zeros() as usize;
+            }
+            i += 16;
+        }
+    }
+    i + scalar::byte_run_len(&data[i..], byte)
+}
+
+type PrefixFn = unsafe fn(&[u8], &[u8]) -> usize;
+type ByteRunFn = unsafe fn(&[u8], u8) -> usize;
+
+static PREFIX_IMPL: LazyLock<PrefixFn> = LazyLock::new(|| {
+    if is_x86_feature_detected!("avx512bw") {
+        common_prefix_len_avx512
+    } else if is_x86_feature_detected!("avx2") {
+        common_prefix_len_avx2
+    } else {
+        common_prefix_len_sse2
+    }
+});
+
+static BYTE_RUN_IMPL: LazyLock<ByteRunFn> = LazyLock::new(|| {
+    if is_x86_feature_detected!("avx512bw") {
+        byte_run_len_avx512
+    } else if is_x86_feature_detected!("avx2") {
+        byte_run_len_avx2
+    } else {
+        byte_run_len_sse2
+    }
+});
+
+/// Length of the common prefix of `a` and `b` (compared over the shorter one).
+pub fn common_prefix_len(a: &[u8], b: &[u8]) -> usize {
+    unsafe { PREFIX_IMPL(a, b) }
+}
+
+/// Length of the prefix of `data` consisting entirely of `byte`.
+pub fn byte_run_len(data: &[u8], byte: u8) -> usize {
+    unsafe { BYTE_RUN_IMPL(data, byte) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -420,6 +585,80 @@ mod tests {
                     &bytes
                 );
                 assert_eq!(got, want, "avx512f hash size={size}");
+            }
+        }
+    }
+
+    // Every packed-scan width must agree with the scalar reference for all
+    // sizes and all mismatch positions — including positions inside the scalar
+    // tail, at vector boundaries, and one past them. A width that overshoots or
+    // undershoots the mismatch would make the caterpillar fast path emit chunks
+    // whose boundaries the argmin path would never have produced.
+    #[test]
+    fn test_packed_scan_widths_agree_with_scalar() {
+        let naive_prefix = |a: &[u8], b: &[u8]| a.iter().zip(b).take_while(|(x, y)| x == y).count();
+
+        for size in 0..300usize {
+            let rng = SmallRng::seed_from_u64(size as u64);
+            let base: Vec<u8> = rng.sample_iter(StandardUniform).take(size).collect();
+
+            // Mismatch at every position p (and p == size: fully equal).
+            for p in 0..=size {
+                let mut b = base.clone();
+                if p < size {
+                    b[p] ^= 0x5A;
+                }
+                let want = naive_prefix(&base, &b);
+                assert_eq!(want, p.min(size));
+                assert_eq!(
+                    scalar::common_prefix_len(&base, &b),
+                    want,
+                    "scalar prefix size={size} p={p}"
+                );
+                assert_eq!(
+                    common_prefix_len_sse2(&base, &b),
+                    want,
+                    "sse2 prefix size={size} p={p}"
+                );
+                if is_x86_feature_detected!("avx2") {
+                    let got = unsafe { common_prefix_len_avx2(&base, &b) };
+                    assert_eq!(got, want, "avx2 prefix size={size} p={p}");
+                }
+                if is_x86_feature_detected!("avx512bw") {
+                    let got = unsafe { common_prefix_len_avx512(&base, &b) };
+                    assert_eq!(got, want, "avx512bw prefix size={size} p={p}");
+                }
+
+                // Byte-run: constant fill broken at p.
+                let mut run = vec![0xABu8; size];
+                if p < size {
+                    run[p] = 0xCD;
+                }
+                assert_eq!(
+                    scalar::byte_run_len(&run, 0xAB),
+                    want,
+                    "scalar run size={size} p={p}"
+                );
+                assert_eq!(
+                    byte_run_len_sse2(&run, 0xAB),
+                    want,
+                    "sse2 run size={size} p={p}"
+                );
+                if is_x86_feature_detected!("avx2") {
+                    let got = unsafe { byte_run_len_avx2(&run, 0xAB) };
+                    assert_eq!(got, want, "avx2 run size={size} p={p}");
+                }
+                if is_x86_feature_detected!("avx512bw") {
+                    let got = unsafe { byte_run_len_avx512(&run, 0xAB) };
+                    assert_eq!(got, want, "avx512bw run size={size} p={p}");
+                }
+            }
+
+            // Slices of different lengths compare over the shorter one.
+            if size >= 2 {
+                let short = &base[..size / 2];
+                assert_eq!(common_prefix_len(&base, short), size / 2);
+                assert_eq!(common_prefix_len(short, &base), size / 2);
             }
         }
     }

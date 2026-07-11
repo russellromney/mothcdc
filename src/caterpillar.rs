@@ -13,6 +13,15 @@
 //! compare per chunk) on data with no runs, so it keeps mincdc's speed and
 //! deduplication everywhere else. The output is lossless.
 //!
+//! Inside a run the caterpillar does not pay for chunking at all: a
+//! VectorCDC-style *packed scan* (whole-vector SIMD equality — broadcast
+//! compare for constant bytes, self-shifted compare for longer periods) proves
+//! the region periodic once, and every chunk whose boundary decision provably
+//! repeats is emitted without re-running the boundary search. Redundant
+//! regions therefore chunk *faster* than plain mincdc instead of slightly
+//! slower (see `packed_repeats` for the proof and `benches/throughput.rs` for
+//! numbers).
+//!
 //! [`CaterpillarChunker`] works on an in-memory byte slice (it wraps
 //! [`SliceChunker`]). For inputs larger than memory, [`CaterpillarReadChunker`]
 //! does the same coalescing over a streaming [`ReadChunker`] in bounded memory,
@@ -42,7 +51,56 @@
 
 use std::io::{self, Read};
 
-use crate::{Cdc, Chunk, SliceChunker};
+use crate::{Cdc, Chunk, SliceChunker, simd};
+
+/// VectorCDC-style packed scanning: the fast-forward that lets the caterpillar
+/// skip the boundary search inside repetitive runs.
+///
+/// Given that a chunk of length `u` starts at the beginning of `tail`
+/// (`tail[..u]` is that chunk, and `tail` extends to the end of decidable
+/// data), returns how many *additional* chunks — each exactly `u` bytes and
+/// byte-identical to the first — are guaranteed to follow, without running the
+/// argmin boundary search (Phase 1) for any of them.
+///
+/// Why this is sound: `next_chunk_len` for a chunk starting at `p` is a pure
+/// function of the decision window `tail[p..p + max_size]`, provided at least
+/// `max_size + 1` bytes remain (which rules out its truncated / short-final
+/// branches). One packed equality scan computes `e`, the largest extent such
+/// that `tail[i] == tail[i - u]` for all `u <= i < e` — i.e. the data is
+/// periodic with period `u` over `tail[..e]`. For any chunk start `p = k * u`
+/// with `p + max_size <= e`, every byte of its decision window equals the byte
+/// one period earlier, so by induction the window is byte-identical to the
+/// first chunk's window and the boundary search *must* return `u` again. Those
+/// chunks are emitted at packed-scan speed; the first chunk whose window
+/// leaves the periodic region (or the decidable region: the `tail.len() - 1`
+/// bound) falls back to the normal argmin + compare path.
+///
+/// The handoff between the two phases is therefore zero-state: this function
+/// only ever *pre-pays* boundary decisions that Phase 1 would provably make,
+/// so the caller resumes the ordinary per-chunk loop at `(1 + repeats) * u` as
+/// if those chunks had been computed one by one.
+fn packed_repeats(tail: &[u8], u: usize, max_size: usize) -> usize {
+    let n = tail.len();
+    if u == 0 || u >= n {
+        return 0;
+    }
+    let unit = &tail[..u];
+    // Extent of the periodic region. A constant-byte unit (zero-fill, padding)
+    // uses the broadcast form: one splat + one load + one packed compare per
+    // vector. Anything else compares the stream against itself shifted back by
+    // one period (two loads per vector). The `unit[u - 1] == unit[0]` pre-check
+    // makes the constant-unit detection O(1) on data without runs.
+    let e = if unit[u - 1] == unit[0] && simd::byte_run_len(unit, unit[0]) == u {
+        u + simd::byte_run_len(&tail[u..], unit[0])
+    } else {
+        u + simd::common_prefix_len(&tail[u..], &tail[..n - u])
+    };
+    // A chunk needing bytes past `n - 1` could hit `next_chunk_len`'s truncated
+    // (end-of-data) branches, whose result depends on more than the window
+    // bytes; leave it to the slow path.
+    let lim = e.min(n - 1);
+    lim.saturating_sub(max_size) / u
+}
 
 /// One output unit of [`CaterpillarChunker`] or [`CaterpillarReadChunker`].
 ///
@@ -159,6 +217,18 @@ impl<'a, C: Cdc> Iterator for CaterpillarChunker<'a, C> {
 
         // Tier 1: coalesce byte-identical adjacent chunks.
         let mut count = 1usize;
+
+        // Packed-scanning fast path: prove the region periodic once and emit
+        // every chunk whose decision window stays inside it, skipping the
+        // argmin boundary search entirely (see `packed_repeats`). The skipped
+        // chunks were never pulled from `inner`, so jump it forward; the loop
+        // below then continues the run (or ends it) through the normal path.
+        let repeats = packed_repeats(&self.data[start..], first_len, self.inner.max_size);
+        if repeats > 0 {
+            count += repeats;
+            self.inner.offset = start + count * first_len;
+        }
+
         let pending: Option<Chunk<'a>> = loop {
             match self.inner.next() {
                 Some(c) if &*c == unit => count += 1,
@@ -295,6 +365,15 @@ impl<R: Read, C: Cdc> CaterpillarReadChunker<R, C> {
         // mid-run, so the unit borrow stays valid).
         let mut run_len = unit_len;
         let mut count = 1usize;
+
+        // Packed-scanning fast path, same as the slice chunker: guaranteed
+        // repeats within the buffered region cost one equality scan instead of
+        // one boundary search each. `pending_len` is untouched — the loop below
+        // computes the first undecided boundary as usual.
+        let repeats = packed_repeats(&self.buf[base..base + self.unread], unit_len, self.max_size);
+        count += repeats;
+        run_len += repeats * unit_len;
+
         loop {
             let cur = base + run_len;
             let avail = self.unread - run_len;
@@ -392,6 +471,188 @@ mod tests {
             records as f64 >= plain as f64 * 0.98,
             "must not coalesce random"
         );
+    }
+
+    /// The pre-SIMD caterpillar, kept as a differential oracle: pull every
+    /// chunk from the plain chunker and RLE-coalesce byte-identical neighbors.
+    /// The packed-scanning fast path must produce exactly this segment stream —
+    /// same grouping, same offsets, same unit bytes.
+    fn reference_segments(data: &[u8], min: usize, max: usize) -> Vec<(usize, Vec<u8>, usize)> {
+        let mut out: Vec<(usize, Vec<u8>, usize)> = Vec::new();
+        for c in SliceChunker::new(data, min, max, MinCdcHash4::new()) {
+            match out.last_mut() {
+                Some((_, unit, count)) if unit[..] == c[..] => *count += 1,
+                _ => out.push((c.offset(), c.to_vec(), 1)),
+            }
+        }
+        out
+    }
+
+    fn assert_matches_reference(label: &str, data: &[u8], min: usize, max: usize) {
+        let got: Vec<(usize, Vec<u8>, usize)> =
+            CaterpillarChunker::new(data, min, max, MinCdcHash4::new())
+                .map(|s| match s {
+                    Segment::Solo(c) => (c.offset(), c.to_vec(), 1),
+                    Segment::Caterpillar {
+                        offset,
+                        unit,
+                        count,
+                    } => (offset, unit.to_vec(), count),
+                })
+                .collect();
+        let want = reference_segments(data, min, max);
+        assert_eq!(got, want, "{label} (min={min} max={max})");
+    }
+
+    /// Soundness of `packed_repeats` against its spec, with the real boundary
+    /// search as the oracle: every claimed repeat must be exactly the chunk
+    /// the slow path would produce — same length, same bytes, under both the
+    /// slice (eof) and streaming (non-eof) decision branches.
+    ///
+    /// The break position sweeps every byte of small periodic buffers, so the
+    /// periodic-extent edge and the repeat-count cutoff are exercised at every
+    /// alignment. Small windows make "the byte just past the periodic region
+    /// wins the argmin" a frequent event rather than a rare one — that is the
+    /// case a random corpus almost never samples, and exactly where an
+    /// extent/count off-by-one becomes a real boundary divergence.
+    #[test]
+    fn packed_repeats_claims_only_provable_chunks() {
+        let cdc = MinCdcHash4::new();
+        for period in [1usize, 2, 3, 5, 8, 13] {
+            let unit = xorshift(period as u64 + 40, period);
+            let mut base = Vec::new();
+            while base.len() < 2000 {
+                base.extend_from_slice(&unit);
+            }
+            base.truncate(2000);
+
+            // break_pos == base.len() means "no break" (pure periodic).
+            for break_pos in 0..=base.len() {
+                let mut data = base.clone();
+                if break_pos < data.len() {
+                    data[break_pos] ^= 0xA5;
+                }
+                for (min, max) in [(16usize, 40usize), (16, 16), (20, 24)] {
+                    let u0 = crate::next_chunk_len(&data, min, max, true, &cdc)
+                        .expect("non-empty input at eof always chunks");
+                    let claimed = packed_repeats(&data, u0, max);
+                    for k in 1..=claimed {
+                        let tail = &data[k * u0..];
+                        let ctx = format!(
+                            "period={period} break={break_pos} min={min} max={max} k={k}/{claimed} u0={u0}"
+                        );
+                        assert_eq!(
+                            crate::next_chunk_len(tail, min, max, true, &cdc),
+                            Some(u0),
+                            "claimed chunk diverges from slow path (eof): {ctx}"
+                        );
+                        assert_eq!(
+                            crate::next_chunk_len(tail, min, max, false, &cdc),
+                            Some(u0),
+                            "claimed chunk diverges from slow path (streaming): {ctx}"
+                        );
+                        assert_eq!(
+                            &tail[..u0],
+                            &data[..u0],
+                            "claimed chunk bytes differ from unit: {ctx}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn packed_fast_path_matches_reference() {
+        const N: usize = 256 * 1024;
+        let mut corpora: Vec<(String, Vec<u8>)> = vec![
+            ("zeros".into(), vec![0u8; N]),
+            ("const-0xAB".into(), vec![0xABu8; N]),
+            ("random".into(), xorshift(7, N)),
+            ("tiny-zeros".into(), vec![0u8; 100]),
+            // Barely more than one decision window: exercises the fast path's
+            // `tail.len() - 1` cutoff where almost every chunk is end-affected.
+            ("small-zeros".into(), vec![0u8; 20_000]),
+        ];
+        for period in [1usize, 3, 4, 5, 100, 777, 2048, 2500, 5000] {
+            let unit = xorshift(period as u64, period);
+            let mut data = Vec::with_capacity(N + period);
+            while data.len() < N {
+                data.extend_from_slice(&unit);
+            }
+            data.truncate(N);
+            corpora.push((format!("periodic-{period}"), data));
+        }
+        // Break the period at adversarial positions: inside the final decision
+        // window (straddling the fast path's cutoff), right at it, and mid-run.
+        {
+            let unit = xorshift(99, 777);
+            let mut data = Vec::new();
+            while data.len() < N {
+                data.extend_from_slice(&unit);
+            }
+            data.truncate(N);
+            for pos in [
+                N - 1,
+                N - 100,
+                N - MAX,
+                N - MAX - 1,
+                N - MAX + 1,
+                N / 2,
+                MAX,
+                MAX + 1,
+                MIN,
+            ] {
+                let mut d = data.clone();
+                d[pos] ^= 0xFF;
+                corpora.push((format!("periodic-777-break@{pos}"), d));
+            }
+        }
+        // A run embedded in random data: the fast path starts and ends
+        // mid-stream, handing off to the argmin path on both sides.
+        {
+            let mut d = xorshift(3, N);
+            for b in &mut d[64 * 1024..192 * 1024] {
+                *b = 0;
+            }
+            corpora.push(("random+zero-hole".into(), d));
+        }
+
+        for (label, data) in &corpora {
+            for (min, max) in [(MIN, MAX), (2048, 2200), (64, 256), (16, 16), (4, 20)] {
+                assert_matches_reference(label, data, min, max);
+            }
+        }
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig {
+            cases: 256, ..proptest::prelude::ProptestConfig::default()
+        })]
+
+        /// Random periodic data with random prefixes and breaks: the packed
+        /// fast path must produce exactly the reference segment stream.
+        #[test]
+        fn prop_fast_path_matches_reference(
+            period in 1usize..600,
+            reps in 2usize..64,
+            seed in proptest::prelude::any::<u64>(),
+            min in 4usize..300,
+            extra in 0usize..300,
+            prefix in 0usize..500,
+            break_at in proptest::option::of(0.0f64..1.0),
+        ) {
+            let unit = xorshift(seed | 1, period);
+            let mut data = xorshift(seed ^ 0xDEAD, prefix);
+            for _ in 0..reps {
+                data.extend_from_slice(&unit);
+            }
+            if let Some(f) = break_at {
+                let pos = ((data.len() as f64 - 1.0) * f) as usize;
+                data[pos] ^= 0xFF;
+            }
+            assert_matches_reference("prop", &data, min, min + extra);
+        }
     }
 
     #[test]

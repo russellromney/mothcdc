@@ -107,11 +107,18 @@ fn corpora() -> Vec<(&'static str, Vec<u8>)> {
     for b in holed[256 * 1024..768 * 1024].iter_mut() {
         *b = 0;
     }
+    // A period break near the end of the stream: at the run's tail the decision
+    // windows straddle the break, which is exactly where the caterpillar's
+    // packed-scanning fast path must hand back to the argmin path.
+    let mut broken = periodic.clone();
+    let blen = broken.len();
+    broken[blen - 10_000] ^= 0xFF;
     vec![
         ("random", xorshift(1, 1024 * 1024)),
         ("zeros", vec![0u8; 1024 * 1024]),
         ("const-0xAB", vec![0xABu8; 1024 * 1024]),
         ("periodic-777", periodic),
+        ("periodic-777-break", broken),
         ("random+zero-hole", holed),
         ("tiny", xorshift(5, 100)),
         ("empty", Vec::new()),

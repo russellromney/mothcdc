@@ -14,7 +14,7 @@ deduplicated.
 To start using `mincatcdc` add the following to your `Cargo.toml`:
 
     [dependencies]
-    mincatcdc = "0.5"
+    mincatcdc = "0.6"
 
 Please refer to [the documentation](https://docs.rs/mincatcdc) for more
 information on usage.
@@ -41,9 +41,12 @@ The caterpillar idea comes from the [Chonkers
 algorithm](https://arxiv.org/abs/2509.11121) (Berger, 2025), which calls a
 periodic run a *caterpillar*.
 
-On speed, the caterpillar is within a few percent of plain mincdc (often free,
-~8% slower at worst on heavily-redundant data, sometimes faster), and mincdc is
-already several times faster than FastCDC.
+On speed, the caterpillar is free on data with no runs and much *faster* than
+plain mincdc on redundant data: a packed SIMD scan (in the spirit of VectorCDC,
+FAST '25) proves a run periodic once and emits the repeated chunks without
+re-running the boundary search — ~15x on zero-fill and ~13x on periodic data in
+`cargo bench` (NEON; SSE2/AVX2/AVX-512 selected at runtime on x86_64). And
+mincdc is already several times faster than FastCDC.
 
 The output: metadata-efficient CDC
 on redundant data without writing any domain-specific preprocessing (zero

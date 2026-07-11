@@ -1,6 +1,6 @@
 [package]
 name = "mincatcdc"
-version = "0.5.0"
+version = "0.6.0"
 authors = ["Orson Peters <orsonpeters@gmail.com>", "Russell Romney"]
 license = "Zlib"
 repository = "https://github.com/russellromney/mincatcdc"
@@ -19,5 +19,10 @@ rand = "0.9.2"
 fastcdc = "4.0.1"
 foldhash = "0.2.0"
 proptest = "1"
+criterion = "0.5"
 
 [dependencies]
+
+[[bench]]
+name = "throughput"
+harness = false
