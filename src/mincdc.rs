@@ -367,6 +367,11 @@ pub(crate) fn checked_buffer_size(min_size: usize, max_size: usize) -> io::Resul
 
 impl<R: Read, C: Cdc> ReadChunker<R, C> {
     /// Gets the next [`Chunk`] from the reader, or [`None`] if it is exhausted.
+    ///
+    /// A `read` returning `Ok(0)` is treated as end of input.
+    /// [`io::ErrorKind::Interrupted`] is retried internally; any other error is
+    /// returned, and progress already made is preserved so the next call can
+    /// resume.
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> io::Result<Option<Chunk<'_>>> {
         if self.done {
