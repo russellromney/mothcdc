@@ -14,7 +14,7 @@ deduplicated.
 To start using `mothcdc` add the following to your `Cargo.toml`:
 
     [dependencies]
-    mothcdc = "0.6"
+    mothcdc = "0.7"
 
 Please refer to [the documentation](https://docs.rs/mothcdc) for more
 information on usage.
@@ -43,6 +43,13 @@ zero region is still one record.
 The crate also ships a C API (`--features capi`) and a
 [dedup-bench fork](https://github.com/russellromney/dedup-bench/tree/MothCDC-integration)
 so it can be measured by the same harness as every other chunker.
+
+The normal Cargo dependency builds only a Rust `rlib`. To produce the static
+library used by C/C++ benchmark harnesses, run:
+
+```sh
+cargo rustc --release --features capi --lib -- --crate-type staticlib
+```
 
 ### Benchmarks
 
@@ -141,6 +148,12 @@ once — at most `max_size` bytes — when it crosses a refill, so even a
 multi-gigabyte zero region is a single record. Everything else stays
 zero-copy.
 
+Offsets, segment lengths, and represented chunk counts are `u64`, so streaming
+metadata remains correct on 32-bit targets. Individual boundary-search windows
+are limited to `mothcdc::mincdc::MAX_CHUNK_SIZE`; the reader chunkers allocate
+at least 4 MiB and provide fallible `try_new` constructors for invalid or
+unallocatable configurations.
+
 (An experimental second tier — content-defined *period detection* for
 phase-rotating runs — was evaluated and removed: mincdc self-aligns to most
 periods so it rarely helped, and it cost 76–99% throughput. See
@@ -155,10 +168,6 @@ Both images were chunked with `cargo run --release --example catbench` at
 produced 7,798, with identical deduplicated content. Full method and the other
 corpora (Linux kernels, containers, SQLite, source trees) are in
 `examples/REALBENCH_RESULTS.md`. Obviously the benchmark is specific to this case. YMMV. 
-
-This fork also fixes a soundness bug in the upstream SIMD prefetch and adds test
-coverage (cross-SIMD-width determinism, an invariant/oracle harness).
-
 
 ## Algorithm
 
@@ -240,4 +249,3 @@ smaller.
 
 There is still a bias towards smaller chunks as MinCDC breaks ties in the
 minimum value towards the earlier breakpoint, but this bias is relatively small.
-

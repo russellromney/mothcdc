@@ -1,8 +1,7 @@
 # Changelog
 
-## 0.7.0 — API unification (2026-07-11)
+## 0.7.0 — API unification and release hardening (2026-07-12)
 
-Breaking change (0.6.0 has zero dependents, so this ships as a free break).
 Unifies the public API around the caterpillar layer as the recommended
 entry point, and separates the inherited MinCDC core from the caterpillar
 layer at the module level:
@@ -20,16 +19,32 @@ layer at the module level:
   `ReadChunker`) moved into a new `mincdc` submodule and is no longer
   re-exported at the crate root — reach it as `mothcdc::mincdc::...`. Only
   `Chunk` stays re-exported at the root (shared by both layers).
-- No behavior change to chunk boundary placement, the caterpillar
-  packed-scanning fast path, or the C API (`mothcdc_next_chunk`'s symbol
-  and behavior are unchanged).
+- `Chunk`/`Segment` offsets, segment lengths, and represented chunk counts are
+  now `u64`; `Segment` has a private validated representation rather than
+  publicly constructible invalid variants.
+- Reader chunkers retry `Interrupted`, use checked buffer arithmetic, expose
+  fallible constructors and reader accessors, and report offset/count overflow.
+- Streaming caterpillar runs now remain maximal even when a `Read`
+  implementation returns tiny fragments; a one-byte reader and `Cursor`
+  produce the same grouping.
+- Fixed a panic on x86_64 CPUs without SSE4.1 when the exact scalar argmin was
+  one of the final three windows.
+- The public `Cdc` splitpoint contract is documented and enforced.
+- The academic `MinCdc4` unit struct can be constructed directly without using
+  its deprecated `new()` helper.
+- The C API validates size configurations without panicking. A normal Rust
+  dependency now builds only an `rlib`; the benchmark static library is built
+  explicitly with `cargo rustc --features capi -- --crate-type staticlib`.
+- CI now covers every feature, formatting, the 1.89 MSRV, and a 32-bit target.
+- The SIMD prefetch soundness fix was submitted upstream as
+  [orlp/mincdc#1](https://github.com/orlp/mincdc/pull/1).
 
 Also includes the mincatcdc -> mothcdc rename (no functional change).
 Credits unchanged: MinCDC algorithm (Orson Peters), caterpillar layer
 inspired by Chonkers (Berger), vector acceleration in the style of
 VectorCDC (Udayashankar et al.).
 
-## 0.6.0 — optimization campaign (2026-07-11)
+## 0.6.0 — optimization campaign and packed scanning (2026-07-10–11)
 
 Ten hypothesis-driven loops on a fixed Fly performance-4x machine (AMD
 EPYC/AVX2), each benched against the same corpus (public Tigris bucket).
@@ -65,7 +80,7 @@ AE-Min 55.47%, FastCDC 52.44%, RAM 49.21%) — at 8.3-9.9 GB/s vs
 VectorCDC-AE-Min's 4.6 GB/s on the same data (only VectorCDC-RAM is
 faster at 17.2 GB/s, with the worst dedup of the field).
 
-## 0.6.0 — 2026-07-10
+### Packed-scanning caterpillar fast path
 
 Packed-scanning caterpillar fast path (VectorCDC-style SIMD).
 
@@ -93,7 +108,7 @@ Packed-scanning caterpillar fast path (VectorCDC-style SIMD).
     within ~2%.
   - Synthetic ceiling: zeros 2.4 → 74.3 GiB/s on Intel Xeon/AVX-512BW,
     1.8 → 30.2 GiB/s on NEON.
-- New `capi` feature: a minimal C API (`mincatcdc_next_chunk`) plus a
+- New `capi` feature: a minimal C API (`mothcdc_next_chunk`) plus a
   dedup-bench fork
   (github.com/russellromney/dedup-bench, branch `mincatcdc-integration`)
   that adds `chunking_algo=mincdc`, so mincatcdc is measured by the *same*
