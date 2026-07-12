@@ -69,6 +69,18 @@ on redundant data without writing any domain-specific preprocessing (zero
 detection, sparse reads, etc.). See `examples/CATBENCH_RESULTS.md` and
 `examples/REALBENCH_RESULTS.md` for measurements on real corpora.
 
+### Choosing min/max
+
+For a target average chunk size, prefer a **narrow window with a high
+minimum**: at the same ~8 KiB average, `(min=4096, max=12288)` chunks ~25%
+faster than `(2048, 14336)` with equal-or-better dedup on real VM-image
+corpora, because the boundary search scans `max - min` bytes per chunk (8 KiB
+instead of 12 KiB). Widening `max` buys fewer metadata records but costs both
+speed and dedup. Measure on your own data with
+`cargo run --release --example frontier -- <paths>`, which prints the
+throughput / dedup / records trade-off for a grid of configurations. (The
+hash multiplier/addend choice measurably does not matter; keep the defaults.)
+
 ### Using the caterpillar
 
 It's a drop-in over the byte-slice chunker — iterate `Segment`s instead of
