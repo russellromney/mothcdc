@@ -12,9 +12,8 @@
 use std::collections::HashMap;
 use std::io::Cursor;
 
-use mothcdc::{
-    CaterpillarChunker, CaterpillarReadChunker, MinCdcHash4, ReadChunker, Segment, SliceChunker,
-};
+use mothcdc::mincdc::{MinCdcHash4, ReadChunker, SliceChunker};
+use mothcdc::{MothChunker, MothReadChunker, Segment};
 use proptest::prelude::*;
 
 fn fnv1a(b: &[u8]) -> u64 {
@@ -38,8 +37,8 @@ fn xorshift(seed: u64, n: usize) -> Vec<u8> {
         .collect()
 }
 
-fn build(data: &[u8], min: usize, max: usize) -> CaterpillarChunker<'_, MinCdcHash4> {
-    CaterpillarChunker::new(data, min, max, MinCdcHash4::new())
+fn build(data: &[u8], min: usize, max: usize) -> MothChunker<'_, MinCdcHash4> {
+    MothChunker::new(data, min, max)
 }
 
 /// The full user round-trip: chunk, build a content-addressed store keyed by
@@ -164,7 +163,7 @@ fn assert_stream_roundtrip<R: std::io::Read>(
 ) {
     let cdc = MinCdcHash4::new();
     let plain = SliceChunker::new(data, min, max, cdc).count();
-    let mut rc = CaterpillarReadChunker::new(reader, min, max, cdc);
+    let mut rc = MothReadChunker::with_cdc(reader, min, max, cdc);
     let (mut next_off, mut chunks) = (0usize, 0usize);
     let mut rebuilt = Vec::with_capacity(data.len());
     while let Some(s) = rc.next().unwrap() {
@@ -201,7 +200,7 @@ fn streaming_chunk_boundaries_match_plain_mincdc() {
             // Expand the streaming caterpillar's segments back to per-chunk
             // boundaries; they must match plain mincdc exactly.
             let mut expanded = Vec::new();
-            let mut sc = CaterpillarReadChunker::new(Cursor::new(&data), min, max, cdc);
+            let mut sc = MothReadChunker::with_cdc(Cursor::new(&data), min, max, cdc);
             while let Some(s) = sc.next().unwrap() {
                 match s {
                     Segment::Solo(c) => expanded.push((c.offset(), c.len())),

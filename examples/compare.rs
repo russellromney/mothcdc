@@ -18,8 +18,8 @@
 use std::time::Instant;
 
 use fastcdc::v2020::FastCDC;
-use mothcdc::caterpillar::CaterpillarChunker;
-use mothcdc::{MinCdcHash4, SliceChunker};
+use mothcdc::MothChunker;
+use mothcdc::mincdc::{MinCdcHash4, SliceChunker};
 
 fn fnv1a(bytes: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
@@ -155,7 +155,7 @@ fn run_mincdc(data: &[u8], min: usize, max: usize, d: &mut Dedup) -> Stats {
 
 fn run_caterpillar(data: &[u8], min: usize, max: usize, d: &mut Dedup) -> Stats {
     let cdc = MinCdcHash4::new();
-    let make = || CaterpillarChunker::new(data, min, max, cdc);
+    let make = || MothChunker::with_cdc(data, min, max, cdc);
     let (gbps, records) = bench(data.len(), || {
         let mut n = 0;
         for s in make() {
@@ -236,7 +236,7 @@ fn scenario_versioned(min: usize, avg: usize, max: usize) {
     // mincdc + caterpillar
     let mut d = Dedup::new();
     for data in [&v1[..], &v2[..]] {
-        for s in CaterpillarChunker::new(data, min, max, cdc) {
+        for s in MothChunker::with_cdc(data, min, max, cdc) {
             d.add(fnv1a(s.dedup_key()), s.dedup_key().len(), s.len());
         }
     }

@@ -15,7 +15,7 @@ use std::hash::BuildHasher;
 use std::io::{Result, Write};
 
 use foldhash::quality::FixedState;
-use mothcdc::{MinCdc4, MinCdcHash4, ReadChunker};
+use mothcdc::mincdc::{MinCdc4, MinCdcHash4, ReadChunker};
 
 fn chunk_file(
     digest_count: &mut HashMap<u64, usize>,

@@ -3,7 +3,8 @@
 //! `Chunking_Technique` drives this library through one function. Not part
 //! of the stable Rust API.
 
-use crate::{MinCdcHash4, caterpillar, next_chunk_len};
+use crate::caterpillar;
+use crate::mincdc::{MinCdcHash4, next_chunk_len};
 
 /// Length of the next chunk at the front of `data[..len]`, using
 /// [`MinCdcHash4`] with the default parameters.
@@ -52,7 +53,7 @@ pub unsafe extern "C" fn mothcdc_next_chunk(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::SliceChunker;
+    use crate::mincdc::SliceChunker;
 
     /// Driving the C API the way dedup-bench's chunk_stream does (a sliding
     /// buffer, consuming `repeats` boundaries without calling back in) must

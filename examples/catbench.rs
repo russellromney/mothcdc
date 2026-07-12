@@ -16,8 +16,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use mothcdc::caterpillar::CaterpillarChunker;
-use mothcdc::{MinCdcHash4, SliceChunker};
+use mothcdc::MothChunker;
+use mothcdc::mincdc::{MinCdcHash4, SliceChunker};
 
 const MIN: usize = 4096;
 const MAX: usize = 12288;
@@ -122,7 +122,7 @@ fn main() {
         };
         for b in &blobs {
             if cat {
-                for s in CaterpillarChunker::new(b, MIN, MAX, cdc) {
+                for s in MothChunker::with_cdc(b, MIN, MAX, cdc) {
                     seen.insert(fnv(s.dedup_key()), ());
                     rec += 1;
                 }
@@ -159,7 +159,7 @@ fn main() {
             let mut n = 0usize;
             let mut s = 0usize;
             for b in &blobs {
-                for seg in CaterpillarChunker::new(b, MIN, MAX, cdc) {
+                for seg in MothChunker::with_cdc(b, MIN, MAX, cdc) {
                     s ^= seg.offset();
                     n += 1;
                 }
