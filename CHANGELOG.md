@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.7.0 — API unification and release hardening (2026-07-12)
+## 0.7.1 — API unification and release hardening (2026-07-12)
 
 Unifies the public API around the caterpillar layer as the recommended
 entry point, and separates the inherited MinCDC core from the caterpillar
