@@ -116,9 +116,9 @@ It's a drop-in over the byte-slice chunker — iterate `Segment`s instead of
 `Chunk`s:
 
 ```rust
-use mothcdc::{CaterpillarChunker, MinCdcHash4};
+use mothcdc::MothChunker;
 
-for seg in CaterpillarChunker::new(&data, 4096, 12288, MinCdcHash4::new()) {
+for seg in MothChunker::new(&data, 4096, 12288) {
     // Store the unique content once. `dedup_key()` returns the bytes to
     // fingerprint regardless of variant (a single chunk or a repeated unit).
     store(hash(seg.dedup_key()), seg.dedup_key());
@@ -128,8 +128,13 @@ for seg in CaterpillarChunker::new(&data, 4096, 12288, MinCdcHash4::new()) {
 }
 ```
 
-`CaterpillarChunker` works on an in-memory slice; for inputs larger than memory,
-`CaterpillarReadChunker` does the same coalescing over a streaming reader in
+`MothChunker::new` uses `MinCdcHash4` with the default hash parameters. For a
+custom `Cdc` instance (e.g. non-default hash parameters), use
+`MothChunker::with_cdc(&data, min, max, cdc)`, where `cdc` can be built with
+`mothcdc::mincdc::MinCdcHash4::with_params(multiplier, addend)`.
+
+`MothChunker` works on an in-memory slice; for inputs larger than memory,
+`MothReadChunker` does the same coalescing over a streaming reader in
 bounded memory (it yields borrowed `Segment`s valid until the next call, like
 `ReadChunker`). Runs coalesce across buffer refills: a run's unit is copied
 once — at most `max_size` bytes — when it crosses a refill, so even a

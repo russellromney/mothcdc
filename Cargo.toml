@@ -1,6 +1,6 @@
 [package]
 name = "mothcdc"
-version = "0.6.0"
+version = "0.7.0"
 authors = ["Orson Peters <orsonpeters@gmail.com>", "Russell Romney"]
 license = "Zlib"
 repository = "https://github.com/russellromney/mothcdc"

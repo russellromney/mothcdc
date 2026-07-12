@@ -16,7 +16,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use mothcdc::{CaterpillarChunker, MinCdcHash4};
+use mothcdc::MothChunker;
+use mothcdc::mincdc::MinCdcHash4;
 
 fn collect_files(root: &Path, out: &mut Vec<PathBuf>) {
     if root.is_dir() {
@@ -48,7 +49,7 @@ fn run(label: &str, blobs: &[Vec<u8>], total: u64, min: usize, max: usize, cdc: 
         let t = Instant::now();
         let mut acc = 0usize;
         for b in blobs {
-            for s in CaterpillarChunker::new(b, min, max, cdc) {
+            for s in MothChunker::with_cdc(b, min, max, cdc) {
                 acc ^= s.offset();
             }
         }
@@ -60,7 +61,7 @@ fn run(label: &str, blobs: &[Vec<u8>], total: u64, min: usize, max: usize, cdc: 
     let mut store: HashMap<u64, usize> = HashMap::new();
     let (mut records, mut chunks) = (0usize, 0usize);
     for b in blobs {
-        for s in CaterpillarChunker::new(b, min, max, cdc) {
+        for s in MothChunker::with_cdc(b, min, max, cdc) {
             let key = s.dedup_key();
             store.entry(fnv(key)).or_insert(key.len());
             records += 1;

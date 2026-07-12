@@ -17,8 +17,8 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use fastcdc::v2020::FastCDC;
-use mothcdc::caterpillar::CaterpillarChunker;
-use mothcdc::{MinCdcHash4, SliceChunker};
+use mothcdc::MothChunker;
+use mothcdc::mincdc::{MinCdcHash4, SliceChunker};
 
 const MIN: usize = 2048;
 const AVG: usize = 8192;
@@ -176,14 +176,14 @@ fn main() {
         let t = Instant::now();
         let mut sink = 0usize;
         for b in &blobs {
-            for s in CaterpillarChunker::new(b, MIN, MC_MAX, cdc) {
+            for s in MothChunker::with_cdc(b, MIN, MC_MAX, cdc) {
                 sink ^= s.offset();
             }
         }
         a.secs = t.elapsed().as_secs_f64();
         std::hint::black_box(sink);
         for b in &blobs {
-            for s in CaterpillarChunker::new(b, MIN, MC_MAX, cdc) {
+            for s in MothChunker::with_cdc(b, MIN, MC_MAX, cdc) {
                 a.add(fnv1a(s.dedup_key()), s.dedup_key().len(), s.len());
             }
         }

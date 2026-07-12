@@ -4,7 +4,7 @@ use std::error::Error;
 use std::fs::File;
 use std::io::Read;
 
-use mothcdc::{MinCdc4, MinCdcHash4, SliceChunker};
+use mothcdc::mincdc::{MinCdc4, MinCdcHash4, SliceChunker};
 
 fn chunk_slice(bytes: &[u8], alg: &str, min_chunk_size: usize, mean_chunk_size: usize) {
     match alg {

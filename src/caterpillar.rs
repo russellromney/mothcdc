@@ -6,7 +6,7 @@
 //! zero-fill or repeated-record region costs metadata out of all proportion to
 //! its information content.
 //!
-//! [`CaterpillarChunker`] wraps a [`SliceChunker`] and run-length-encodes
+//! [`MothChunker`] wraps a [`SliceChunker`] and run-length-encodes
 //! maximal runs of byte-identical adjacent chunks into a single
 //! [`Segment::Caterpillar`] record (the unit + a repeat count). It catches
 //! zero-fill, constant bytes, and repeated blocks; it is a no-op (one slice
@@ -22,21 +22,21 @@
 //! slower (see `packed_repeats` for the proof and `benches/throughput.rs` for
 //! numbers).
 //!
-//! [`CaterpillarChunker`] works on an in-memory byte slice (it wraps
-//! [`SliceChunker`]). For inputs larger than memory, [`CaterpillarReadChunker`]
+//! [`MothChunker`] works on an in-memory byte slice (it wraps
+//! [`SliceChunker`]). For inputs larger than memory, [`MothReadChunker`]
 //! does the same coalescing over a streaming [`ReadChunker`] in bounded memory,
 //! yielding borrowed [`Segment`]s (valid until the next call, like
-//! [`ReadChunker::next`](crate::ReadChunker)). Runs coalesce across buffer
+//! [`ReadChunker::next`](crate::mincdc::ReadChunker)). Runs coalesce across buffer
 //! refills (a run's unit is copied once — at most `max_size` bytes — when it
 //! crosses a refill), so even a run far longer than the buffer is one record;
 //! everything else is zero-copy.
 //!
 //! # Example
 //! ```
-//! use mothcdc::{MinCdcHash4, caterpillar::{CaterpillarChunker, Segment}};
+//! use mothcdc::{MothChunker, Segment};
 //!
 //! let data = vec![0u8; 64 * 4096]; // a long zero run
-//! let segs: Vec<_> = CaterpillarChunker::new(&data, 4096, 12288, MinCdcHash4::new()).collect();
+//! let segs: Vec<_> = MothChunker::new(&data, 4096, 12288).collect();
 //!
 //! // The whole zero run collapses into one record instead of ~64 chunks.
 //! assert_eq!(segs.len(), 1);
@@ -52,7 +52,8 @@
 
 use std::io::{self, Read};
 
-use crate::{Cdc, Chunk, SliceChunker, simd};
+use crate::mincdc::{Cdc, Chunk, MinCdcHash4, SliceChunker};
+use crate::simd;
 
 /// VectorCDC-style packed scanning: the fast-forward that lets the caterpillar
 /// skip the boundary search inside repetitive runs.
@@ -119,11 +120,11 @@ pub(crate) fn packed_repeats(tail: &[u8], u: usize, max_size: usize) -> usize {
     lim.saturating_sub(max_size) / u
 }
 
-/// One output unit of [`CaterpillarChunker`] or [`CaterpillarReadChunker`].
+/// One output unit of [`MothChunker`] or [`MothReadChunker`].
 ///
-/// The borrow source differs by producer: from [`CaterpillarChunker`] a segment
+/// The borrow source differs by producer: from [`MothChunker`] a segment
 /// borrows the input slice (valid for the whole iteration); from
-/// [`CaterpillarReadChunker`] it borrows the reader's reused buffer and is valid
+/// [`MothReadChunker`] it borrows the reader's reused buffer and is valid
 /// **only until the next call**. Process it (or copy [`dedup_key`](Self::dedup_key))
 /// before advancing the streaming chunker.
 #[derive(Debug)]
@@ -204,17 +205,26 @@ impl<'a> Segment<'a> {
 }
 
 /// Wraps a [`SliceChunker`] and coalesces periodic / repeated regions.
-pub struct CaterpillarChunker<'a, C> {
+pub struct MothChunker<'a, C = MinCdcHash4> {
     data: &'a [u8],
     inner: SliceChunker<'a, C>,
     carry: Option<Chunk<'a>>,
 }
 
-impl<'a, C: Cdc> CaterpillarChunker<'a, C> {
+impl<'a> MothChunker<'a, MinCdcHash4> {
     /// Creates a caterpillar chunker (run-length-encodes byte-identical adjacent
-    /// chunks). This is the recommended default: free on data with no runs, and
-    /// it collapses zero-fill, padding, and repeated blocks into single records.
-    pub fn new(bytes: &'a [u8], min_size: usize, max_size: usize, cdc: C) -> Self {
+    /// chunks) using [`MinCdcHash4`] with the default hash parameters. This is
+    /// the recommended default: free on data with no runs, and it collapses
+    /// zero-fill, padding, and repeated blocks into single records.
+    pub fn new(bytes: &'a [u8], min_size: usize, max_size: usize) -> Self {
+        Self::with_cdc(bytes, min_size, max_size, MinCdcHash4::new())
+    }
+}
+
+impl<'a, C: Cdc> MothChunker<'a, C> {
+    /// Creates a caterpillar chunker with a custom [`Cdc`] instance (e.g.
+    /// [`MinCdcHash4::with_params`] or [`MinCdc4`](crate::mincdc::MinCdc4)).
+    pub fn with_cdc(bytes: &'a [u8], min_size: usize, max_size: usize, cdc: C) -> Self {
         Self {
             data: bytes,
             inner: SliceChunker::new(bytes, min_size, max_size, cdc),
@@ -223,7 +233,7 @@ impl<'a, C: Cdc> CaterpillarChunker<'a, C> {
     }
 }
 
-impl<'a, C: Cdc> Iterator for CaterpillarChunker<'a, C> {
+impl<'a, C: Cdc> Iterator for MothChunker<'a, C> {
     type Item = Segment<'a>;
 
     fn next(&mut self) -> Option<Segment<'a>> {
@@ -265,11 +275,11 @@ impl<'a, C: Cdc> Iterator for CaterpillarChunker<'a, C> {
     }
 }
 
-/// Streaming caterpillar: [`CaterpillarChunker`] for a [`Read`] source.
+/// Streaming caterpillar: [`MothChunker`] for a [`Read`] source.
 ///
 /// It coalesces byte-identical adjacent chunks *inside* the reader's buffer and
 /// yields **borrowed** [`Segment`]s valid only until the next call (the same
-/// contract as [`ReadChunker::next`](crate::ReadChunker)) — so it never copies
+/// contract as [`ReadChunker::next`](crate::mincdc::ReadChunker)) — so it never copies
 /// and runs in bounded memory, working on inputs larger than RAM.
 ///
 /// A run is coalesced even when it is longer than the internal buffer: when a
@@ -280,7 +290,7 @@ impl<'a, C: Cdc> Iterator for CaterpillarChunker<'a, C> {
 /// else stays zero-copy: solos and runs contained in one buffer borrow the
 /// internal buffer directly. Tier 1 only (no period detection in the
 /// streaming path).
-pub struct CaterpillarReadChunker<R, C> {
+pub struct MothReadChunker<R, C = MinCdcHash4> {
     min_size: usize,
     max_size: usize,
     cdc: C,
@@ -301,9 +311,19 @@ pub struct CaterpillarReadChunker<R, C> {
     emit_unit: Vec<u8>,
 }
 
-impl<R, C: Cdc> CaterpillarReadChunker<R, C> {
-    /// Creates a zero-copy streaming caterpillar chunker.
-    pub fn new(reader: R, min_size: usize, max_size: usize, cdc: C) -> Self {
+impl<R> MothReadChunker<R, MinCdcHash4> {
+    /// Creates a zero-copy streaming caterpillar chunker using [`MinCdcHash4`]
+    /// with the default hash parameters.
+    pub fn new(reader: R, min_size: usize, max_size: usize) -> Self {
+        Self::with_cdc(reader, min_size, max_size, MinCdcHash4::new())
+    }
+}
+
+impl<R, C: Cdc> MothReadChunker<R, C> {
+    /// Creates a zero-copy streaming caterpillar chunker with a custom [`Cdc`]
+    /// instance (e.g. [`MinCdcHash4::with_params`] or
+    /// [`MinCdc4`](crate::mincdc::MinCdc4)).
+    pub fn with_cdc(reader: R, min_size: usize, max_size: usize, cdc: C) -> Self {
         assert!(min_size <= max_size && max_size > 0);
         let buf_size = crate::MIN_BUFFER_SIZE + (max_size + 1) + min_size * 4;
         Self {
@@ -325,10 +345,10 @@ impl<R, C: Cdc> CaterpillarReadChunker<R, C> {
 
     /// Length of the chunk starting at buffer position `p` given `avail` buffered
     /// bytes from there, or `None` if it can't be decided without more data.
-    /// Delegates to the shared [`crate::next_chunk_len`] so it can't diverge from
-    /// `SliceChunker` / `ReadChunker`.
+    /// Delegates to the shared [`crate::mincdc::next_chunk_len`] so it can't diverge
+    /// from `SliceChunker` / `ReadChunker`.
     fn chunk_len(&self, p: usize, avail: usize) -> Option<usize> {
-        crate::next_chunk_len(
+        crate::mincdc::next_chunk_len(
             &self.buf[p..p + avail],
             self.min_size,
             self.max_size,
@@ -362,7 +382,7 @@ impl<R, C: Cdc> CaterpillarReadChunker<R, C> {
     }
 }
 
-impl<R: Read, C: Cdc> CaterpillarReadChunker<R, C> {
+impl<R: Read, C: Cdc> MothReadChunker<R, C> {
     /// Reads/shifts until at least `max_size + 1` bytes are buffered (or EOF).
     /// Only ever called at a run boundary, when no segment borrow is live.
     fn ensure(&mut self) -> io::Result<()> {
@@ -387,7 +407,7 @@ impl<R: Read, C: Cdc> CaterpillarReadChunker<R, C> {
 
     /// Gets the next [`Segment`] (borrowed, valid until the next call), or `None`.
     ///
-    /// Like [`ReadChunker`](crate::ReadChunker), a `read` returning `Ok(0)` is
+    /// Like [`ReadChunker`](crate::mincdc::ReadChunker), a `read` returning `Ok(0)` is
     /// treated as end of input.
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> io::Result<Option<Segment<'_>>> {
@@ -491,7 +511,6 @@ impl<R: Read, C: Cdc> CaterpillarReadChunker<R, C> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::MinCdcHash4;
 
     const MIN: usize = 2 * 1024;
     const MAX: usize = 14 * 1024;
@@ -518,7 +537,7 @@ mod tests {
         let mut expanded = 0usize;
         let mut next_off = 0usize;
         let mut rebuilt: Vec<u8> = Vec::with_capacity(data.len());
-        for s in CaterpillarChunker::new(data, min, max, cdc) {
+        for s in MothChunker::with_cdc(data, min, max, cdc) {
             assert_eq!(s.offset(), next_off, "{label}: offset not contiguous");
             records += 1;
             expanded += s.chunk_count();
@@ -561,17 +580,16 @@ mod tests {
     }
 
     fn assert_matches_reference(label: &str, data: &[u8], min: usize, max: usize) {
-        let got: Vec<(usize, Vec<u8>, usize)> =
-            CaterpillarChunker::new(data, min, max, MinCdcHash4::new())
-                .map(|s| match s {
-                    Segment::Solo(c) => (c.offset(), c.to_vec(), 1),
-                    Segment::Caterpillar {
-                        offset,
-                        unit,
-                        count,
-                    } => (offset, unit.to_vec(), count),
-                })
-                .collect();
+        let got: Vec<(usize, Vec<u8>, usize)> = MothChunker::new(data, min, max)
+            .map(|s| match s {
+                Segment::Solo(c) => (c.offset(), c.to_vec(), 1),
+                Segment::Caterpillar {
+                    offset,
+                    unit,
+                    count,
+                } => (offset, unit.to_vec(), count),
+            })
+            .collect();
         let want = reference_segments(data, min, max);
         assert_eq!(got, want, "{label} (min={min} max={max})");
     }
@@ -605,7 +623,7 @@ mod tests {
                     data[break_pos] ^= 0xA5;
                 }
                 for (min, max) in [(16usize, 40usize), (16, 16), (20, 24)] {
-                    let u0 = crate::next_chunk_len(&data, min, max, true, &cdc)
+                    let u0 = crate::mincdc::next_chunk_len(&data, min, max, true, &cdc)
                         .expect("non-empty input at eof always chunks");
                     let claimed = packed_repeats(&data, u0, max);
                     for k in 1..=claimed {
@@ -614,12 +632,12 @@ mod tests {
                             "period={period} break={break_pos} min={min} max={max} k={k}/{claimed} u0={u0}"
                         );
                         assert_eq!(
-                            crate::next_chunk_len(tail, min, max, true, &cdc),
+                            crate::mincdc::next_chunk_len(tail, min, max, true, &cdc),
                             Some(u0),
                             "claimed chunk diverges from slow path (eof): {ctx}"
                         );
                         assert_eq!(
-                            crate::next_chunk_len(tail, min, max, false, &cdc),
+                            crate::mincdc::next_chunk_len(tail, min, max, false, &cdc),
                             Some(u0),
                             "claimed chunk diverges from slow path (streaming): {ctx}"
                         );
@@ -736,7 +754,7 @@ mod tests {
         // 24 MiB of zeros -> crosses the 4 MiB buffer several times.
         let n = 24 * 1024 * 1024;
         let data = vec![0u8; n];
-        let mut rc = CaterpillarReadChunker::new(Cursor::new(&data), MIN, MAX, MinCdcHash4::new());
+        let mut rc = MothReadChunker::new(Cursor::new(&data), MIN, MAX);
         let mut records = 0usize;
         let mut chunks = 0usize;
         let mut covered = 0usize;
@@ -758,7 +776,7 @@ mod tests {
         let mut data = xorshift(11, 64 * 1024);
         data.extend_from_slice(&vec![0u8; 12 * 1024 * 1024]);
         data.extend_from_slice(&xorshift(12, 64 * 1024));
-        let mut rc = CaterpillarReadChunker::new(Cursor::new(&data), MIN, MAX, MinCdcHash4::new());
+        let mut rc = MothReadChunker::new(Cursor::new(&data), MIN, MAX);
         let (mut records, mut chunks, mut covered) = (0usize, 0usize, 0usize);
         let mut rebuilt = Vec::with_capacity(data.len());
         while let Some(s) = rc.next().unwrap() {

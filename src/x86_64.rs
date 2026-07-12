@@ -561,7 +561,7 @@ pub fn byte_run_len(data: &[u8], byte: u8) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DEFAULT_ADDEND, DEFAULT_MULTIPLIER};
+    use crate::mincdc::{DEFAULT_ADDEND, DEFAULT_MULTIPLIER};
     use rand::distr::StandardUniform;
     use rand::prelude::*;
 

@@ -1,10 +1,33 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 — API unification (2026-07-11)
 
-Renamed mincatcdc to mothcdc. No functional change. Credits unchanged:
-MinCDC algorithm (Orson Peters), caterpillar layer inspired by Chonkers
-(Berger), vector acceleration in the style of VectorCDC (Udayashankar et al.).
+Breaking change (0.6.0 has zero dependents, so this ships as a free break).
+Unifies the public API around the caterpillar layer as the recommended
+entry point, and separates the inherited MinCDC core from the caterpillar
+layer at the module level:
+
+- `caterpillar::CaterpillarChunker` and `caterpillar::CaterpillarReadChunker`
+  are renamed to `MothChunker` and `MothReadChunker` (still re-exported at
+  the crate root). No deprecated aliases — the old names are gone.
+- `MothChunker` and `MothReadChunker` are now generic over the `Cdc`
+  implementation with `MinCdcHash4` as the default type parameter.
+  `MothChunker::new(bytes, min, max)` / `MothReadChunker::new(reader, min,
+  max)` build with `MinCdcHash4::new()` internally; `with_cdc(..., cdc)`
+  takes a custom `Cdc` instance (e.g. `MinCdcHash4::with_params`, or the
+  academic `MinCdc4`).
+- The inherited MinCDC core (`Cdc`, `MinCdc4`, `MinCdcHash4`, `SliceChunker`,
+  `ReadChunker`) moved into a new `mincdc` submodule and is no longer
+  re-exported at the crate root — reach it as `mothcdc::mincdc::...`. Only
+  `Chunk` stays re-exported at the root (shared by both layers).
+- No behavior change to chunk boundary placement, the caterpillar
+  packed-scanning fast path, or the C API (`mothcdc_next_chunk`'s symbol
+  and behavior are unchanged).
+
+Also includes the mincatcdc -> mothcdc rename (no functional change).
+Credits unchanged: MinCDC algorithm (Orson Peters), caterpillar layer
+inspired by Chonkers (Berger), vector acceleration in the style of
+VectorCDC (Udayashankar et al.).
 
 ## 0.6.0 — optimization campaign (2026-07-11)
 

@@ -6,7 +6,7 @@
 //!                       baseline: pull every chunk (a full argmin boundary
 //!                       search each) and RLE-coalesce byte-identical
 //!                       neighbors.
-//!   caterpillar-packed  the shipped CaterpillarChunker: one packed equality
+//!   caterpillar-packed  the shipped MothChunker: one packed equality
 //!                       scan proves a run periodic and emits the repeats
 //!                       without running the boundary search for them.
 //!
@@ -27,7 +27,8 @@
 use std::path::Path;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use mothcdc::{CaterpillarChunker, MinCdcHash4, SliceChunker};
+use mothcdc::MothChunker;
+use mothcdc::mincdc::{MinCdcHash4, SliceChunker};
 
 const MIN: usize = 4096;
 const MAX: usize = 12288;
@@ -203,7 +204,7 @@ fn bench_chunking(c: &mut Criterion) {
             |b, d| {
                 b.iter(|| {
                     let mut acc = 0usize;
-                    for s in CaterpillarChunker::new(d, MIN, MAX, MinCdcHash4::new()) {
+                    for s in MothChunker::new(d, MIN, MAX) {
                         acc ^= s.offset() ^ s.chunk_count();
                     }
                     acc
