@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.0 — optimization campaign (2026-07-11)
+
+Ten hypothesis-driven loops on a fixed Fly performance-4x machine (AMD
+EPYC/AVX2), each benched against the same corpus (public Tigris bucket).
+Kept (4): loop 2 — 4x-unrolled packed-scan skip loops (zeros scan 46 → 79
+GiB/s, +2-3% end-to-end on real VM images); loop 5 — the streaming
+caterpillar carries runs across buffer refills (a multi-GB zero region is
+now ONE record instead of one per 4 MiB buffer; unit copied once per
+crossing run, everything else stays zero-copy); loop 6/7 — `examples/frontier.rs`
+sweep tool plus measured configuration guidance: at the same ~8 KiB average,
+`(4096, 12288)` chunks ~40% faster than `(2048, 14336)` with equal-or-better
+dedup (in dedup-bench's own harness: 16.2 GiB/s and 53.29% savings on the
+raw Debian image — past VectorCDC-AE-Min's 13.8 GiB/s on the same run);
+loop 9 — the guidance in the README.
+Rejected with data (4): fat LTO/codegen-units (±1%, kernels are monolithic
+target_feature fns); dual-accumulator argmin (±2%, the OoO core already
+extracts that ILP on both EPYC and M-series); prefetch-distance tuning
+(±2% across 4K-64K); branch-skipping the argmin offset blend (-9% to -40%,
+the branch mispredicts exactly where the argmin is hot — the unconditional
+blend design is correct). Hash multiplier choice: measured irrelevant
+(three multipliers within noise); `a=0` trades +1.4pp savings for chunk-size
+skew and -15% speed — documented, not defaulted.
+
 ## 0.6.0 — 2026-07-10
 
 Packed-scanning caterpillar fast path (VectorCDC-style SIMD).
