@@ -1,4 +1,4 @@
-//! Minimal C API (feature `capi`) for embedding mincatcdc in external
+//! Minimal C API (feature `capi`) for embedding mothcdc in external
 //! harnesses — written for the UWASL dedup-bench integration, where a C++
 //! `Chunking_Technique` drives this library through one function. Not part
 //! of the stable Rust API.
@@ -24,7 +24,7 @@ use crate::{MinCdcHash4, caterpillar, next_chunk_len};
 /// `data` must point to `len` readable bytes. `repeats_out` must be null or
 /// point to a writable `usize`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mincatcdc_next_chunk(
+pub unsafe extern "C" fn mothcdc_next_chunk(
     data: *const u8,
     len: usize,
     min_size: usize,
@@ -102,7 +102,7 @@ mod tests {
                 let mut reps = 0usize;
                 let eof = (window.len() < max + 1) as core::ffi::c_int;
                 let l = unsafe {
-                    mincatcdc_next_chunk(window.as_ptr(), window.len(), min, max, eof, &mut reps)
+                    mothcdc_next_chunk(window.as_ptr(), window.len(), min, max, eof, &mut reps)
                 };
                 assert!(l > 0, "boundary must be decidable under the eof rule");
                 pending_repeats = reps;

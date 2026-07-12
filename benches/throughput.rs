@@ -27,7 +27,7 @@
 use std::path::Path;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use mincatcdc::{CaterpillarChunker, MinCdcHash4, SliceChunker};
+use mothcdc::{CaterpillarChunker, MinCdcHash4, SliceChunker};
 
 const MIN: usize = 4096;
 const MAX: usize = 12288;

@@ -1,13 +1,13 @@
 [package]
-name = "mincatcdc"
+name = "mothcdc"
 version = "0.6.0"
 authors = ["Orson Peters <orsonpeters@gmail.com>", "Russell Romney"]
 license = "Zlib"
-repository = "https://github.com/russellromney/mincatcdc"
+repository = "https://github.com/russellromney/mothcdc"
 readme = "README.md"
 keywords = ["cdc", "chunking", "deduplication"]
 categories = ["algorithms", "compression"]
-description = "A fork of MinCDC adding a caterpillar layer: metadata-efficient content-defined chunking on redundant data."
+description = "mothcdc (formerly mincatcdc): a fork of MinCDC adding a caterpillar layer: metadata-efficient content-defined chunking on redundant data."
 edition = "2024"
 # 1.89 because the x86 AVX-512 intrinsics in src/x86_64.rs stabilized in 1.89
 # (the crate does not build on x86 below that). Other targets only need 1.85.

@@ -33,7 +33,7 @@
 //!
 //! # Example
 //! ```
-//! use mincatcdc::{MinCdcHash4, caterpillar::{CaterpillarChunker, Segment}};
+//! use mothcdc::{MinCdcHash4, caterpillar::{CaterpillarChunker, Segment}};
 //!
 //! let data = vec![0u8; 64 * 4096]; // a long zero run
 //! let segs: Vec<_> = CaterpillarChunker::new(&data, 4096, 12288, MinCdcHash4::new()).collect();

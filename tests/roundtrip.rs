@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::io::Cursor;
 
-use mincatcdc::{
+use mothcdc::{
     CaterpillarChunker, CaterpillarReadChunker, MinCdcHash4, ReadChunker, Segment, SliceChunker,
 };
 use proptest::prelude::*;

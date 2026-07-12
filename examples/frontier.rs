@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use mincatcdc::{CaterpillarChunker, MinCdcHash4};
+use mothcdc::{CaterpillarChunker, MinCdcHash4};
 
 fn collect_files(root: &Path, out: &mut Vec<PathBuf>) {
     if root.is_dir() {

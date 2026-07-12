@@ -18,7 +18,7 @@
 
 use std::io::{self, Read};
 
-use mincatcdc::{Cdc, MinCdc4, MinCdcHash4, ReadChunker, SliceChunker};
+use mothcdc::{Cdc, MinCdc4, MinCdcHash4, ReadChunker, SliceChunker};
 use proptest::prelude::*;
 
 const WINDOW: usize = 4;

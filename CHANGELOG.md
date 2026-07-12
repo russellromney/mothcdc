@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+Renamed mincatcdc to mothcdc. No functional change. Credits unchanged:
+MinCDC algorithm (Orson Peters), caterpillar layer inspired by Chonkers
+(Berger), vector acceleration in the style of VectorCDC (Udayashankar et al.).
+
 ## 0.6.0 — optimization campaign (2026-07-11)
 
 Ten hypothesis-driven loops on a fixed Fly performance-4x machine (AMD
