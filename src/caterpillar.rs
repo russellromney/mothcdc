@@ -88,13 +88,29 @@ pub(crate) fn packed_repeats(tail: &[u8], u: usize, max_size: usize) -> usize {
     let unit = &tail[..u];
     // Extent of the periodic region. A constant-byte unit (zero-fill, padding)
     // uses the broadcast form: one splat + one load + one packed compare per
-    // vector. Anything else compares the stream against itself shifted back by
-    // one period (two loads per vector). The `unit[u - 1] == unit[0]` pre-check
-    // makes the constant-unit detection O(1) on data without runs.
+    // vector; its scan cost is bounded by the actual run of that byte. The
+    // `unit[u - 1] == unit[0]` pre-check makes the constant-unit detection
+    // O(1) on data without runs.
     let e = if unit[u - 1] == unit[0] && simd::byte_run_len(unit, unit[0]) == u {
         u + simd::byte_run_len(&tail[u..], unit[0])
     } else {
-        u + simd::common_prefix_len(&tail[u..], &tail[..n - u])
+        // Staged scan. Data like tar archives of similar trees is full of
+        // medium pseudo-periodic stretches (similar adjacent files, sparse
+        // padding) where an unbounded extent scan runs long and then yields
+        // zero usable repeats — measured as a 31% throughput loss on Linux
+        // kernel source tars. So first probe exactly one unit: if the next
+        // chunk is not byte-identical to this one, no coalescing is possible
+        // (K = 0 either way) and the probe cost is bounded by the mismatch
+        // position, exactly like the pre-packed-scan memcmp. Only a proven
+        // identical neighbor unlocks the full extent scan.
+        if 2 * u > n {
+            return 0;
+        }
+        let probe = simd::common_prefix_len(&tail[u..2 * u], unit);
+        if probe < u {
+            return 0;
+        }
+        2 * u + simd::common_prefix_len(&tail[2 * u..], &tail[u..n - u])
     };
     // A chunk needing bytes past `n - 1` could hit `next_chunk_len`'s truncated
     // (end-of-data) branches, whose result depends on more than the window
