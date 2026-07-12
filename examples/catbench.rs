@@ -19,8 +19,8 @@ use std::time::Instant;
 use mincatcdc::caterpillar::CaterpillarChunker;
 use mincatcdc::{MinCdcHash4, SliceChunker};
 
-const MIN: usize = 2048;
-const MAX: usize = 14336;
+const MIN: usize = 4096;
+const MAX: usize = 12288;
 const ITERS: usize = 5;
 const RECORD_BYTES: usize = 48; // 32B fingerprint + offset/len/bookkeeping
 

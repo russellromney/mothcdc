@@ -29,8 +29,8 @@ use std::path::Path;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use mincatcdc::{CaterpillarChunker, MinCdcHash4, SliceChunker};
 
-const MIN: usize = 2048;
-const MAX: usize = 14336;
+const MIN: usize = 4096;
+const MAX: usize = 12288;
 const SIZE: usize = 8 * 1024 * 1024;
 
 fn xorshift(seed: u64, n: usize) -> Vec<u8> {
