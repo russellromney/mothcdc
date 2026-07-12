@@ -100,15 +100,10 @@ unsafe fn avx2_impl<const SHOULD_HASH: bool>(bytes: &[u8], multiplier: u32, adde
     let vadd = _mm256_set1_epi32((addend as i32).wrapping_add(i32::MIN));
 
     let mut offset = 0;
-    // Two independent (value, offset) accumulator pairs so the two unrolled
-    // body calls per iteration don't serialize through one min/blend chain;
-    // merged at the end (the final pair reduction is tie-correct by offset).
     let mut min_val = _mm256_set1_epi32(i32::MAX);
     let mut min_offset = _mm256_set1_epi32(0);
-    let mut min_val_b = _mm256_set1_epi32(i32::MAX);
-    let mut min_offset_b = _mm256_set1_epi32(0);
 
-    let body = |offset: &mut usize, min_val: &mut __m256i, min_offset: &mut __m256i| unsafe {
+    let mut body = |offset: &mut usize| unsafe {
         let mut v0 = _mm256_loadu_si256(bytes.as_ptr().add(*offset).cast());
         let mut v1 = _mm256_loadu_si256(bytes.as_ptr().add(*offset + 1).cast());
         let mut v2 = _mm256_loadu_si256(bytes.as_ptr().add(*offset + 2).cast());
@@ -137,9 +132,9 @@ unsafe fn avx2_impl<const SHOULD_HASH: bool>(bytes: &[u8], multiplier: u32, adde
         }
 
         let voffset = _mm256_set1_epi32(*offset as i32);
-        let better = _mm256_cmpgt_epi32(*min_val, m0123s);
-        *min_val = _mm256_min_epi32(*min_val, m0123s);
-        *min_offset = _mm256_blendv_epi8(*min_offset, voffset, better);
+        let better = _mm256_cmpgt_epi32(min_val, m0123s);
+        min_val = _mm256_min_epi32(min_val, m0123s);
+        min_offset = _mm256_blendv_epi8(min_offset, voffset, better);
         *offset += 32;
     };
 
@@ -149,44 +144,31 @@ unsafe fn avx2_impl<const SHOULD_HASH: bool>(bytes: &[u8], multiplier: u32, adde
             // address computation sound.
             _mm_prefetch::<_MM_HINT_T0>(bytes.as_ptr().wrapping_add(offset + PREFETCH_DIST).cast());
 
-            // Manually unrolled twice, into independent accumulators.
-            body(&mut offset, &mut min_val, &mut min_offset);
-            body(&mut offset, &mut min_val_b, &mut min_offset_b);
+            // Manually unrolled twice.
+            body(&mut offset);
+            body(&mut offset);
         }
         while offset + 4 <= bytes.len() {
             if offset + 32 + 3 > bytes.len() {
                 offset = bytes.len() - 32 - 3;
             }
 
-            body(&mut offset, &mut min_val, &mut min_offset);
+            body(&mut offset);
         }
 
         // Add the corresponding relative offsets for each 32-bit subregister
-        // and interleave to 64-bit (value, offset) pairs. Both accumulator
-        // pairs carry absolute block offsets, so reducing over all of them is
-        // order-correct (min by value, ties by earliest offset).
+        // and interleave to 64-bit (value, offset) pairs.
         static SUBREG_OFFSET: [u32; 8] = [0, 4, 8, 12, 16, 20, 24, 28];
-        let vsub = _mm256_loadu_si256(SUBREG_OFFSET.as_ptr().cast());
-        min_offset = _mm256_add_epi32(min_offset, vsub);
-        min_offset_b = _mm256_add_epi32(min_offset_b, vsub);
+        min_offset = _mm256_add_epi32(
+            min_offset,
+            _mm256_loadu_si256(SUBREG_OFFSET.as_ptr().cast()),
+        );
+        let pairs_lo = _mm256_unpacklo_epi32(min_offset, min_val);
+        let pairs_hi = _mm256_unpackhi_epi32(min_offset, min_val);
 
-        let mut out = [0i64; 16];
-        _mm256_storeu_si256(
-            out.as_mut_ptr().cast(),
-            _mm256_unpacklo_epi32(min_offset, min_val),
-        );
-        _mm256_storeu_si256(
-            out.as_mut_ptr().add(4).cast(),
-            _mm256_unpackhi_epi32(min_offset, min_val),
-        );
-        _mm256_storeu_si256(
-            out.as_mut_ptr().add(8).cast(),
-            _mm256_unpacklo_epi32(min_offset_b, min_val_b),
-        );
-        _mm256_storeu_si256(
-            out.as_mut_ptr().add(12).cast(),
-            _mm256_unpackhi_epi32(min_offset_b, min_val_b),
-        );
+        let mut out = [0i64; 8];
+        _mm256_storeu_si256(out.as_mut_ptr().cast(), pairs_lo);
+        _mm256_storeu_si256(out.as_mut_ptr().add(4).cast(), pairs_hi);
         out.iter().copied().min().unwrap() as u32 as usize
     }
 }

@@ -24,18 +24,14 @@ pub fn argmin_u32_overlapping_hashed<const SHOULD_HASH: bool>(
         //   min_offset[i] will contain the offset 16*k at which this occurs.
         // This means after the vectorized loop we only have to choose the smallest min_val[i]
         // and check four positions min_offset[i]..min_offset[i] + 4 for the overall minimum.
-        // Two independent accumulator pairs so the two unrolled body calls
-        // per iteration don't serialize through one min/select chain.
         let mut min_val = vdupq_n_u32(u32::MAX);
         let mut min_offset = vdupq_n_u32(0);
-        let mut min_val_b = vdupq_n_u32(u32::MAX);
-        let mut min_offset_b = vdupq_n_u32(0);
 
         let mut offset = 0;
         let vmul = vdupq_n_u32(multiplier);
         let vadd = vdupq_n_u32(addend);
 
-        let body = |offset: &mut usize, min_val: &mut uint32x4_t, min_offset: &mut uint32x4_t| {
+        let mut body = |offset: &mut usize| {
             let mut v0 = vld1q_u32(bytes.as_ptr().add(*offset).cast());
             let mut v1 = vld1q_u32(bytes.as_ptr().add(*offset + 1).cast());
             let mut v2 = vld1q_u32(bytes.as_ptr().add(*offset + 2).cast());
@@ -52,37 +48,32 @@ pub fn argmin_u32_overlapping_hashed<const SHOULD_HASH: bool>(
             let m23 = vminq_u32(v2, v3);
             let m0123 = vminq_u32(m01, m23);
 
-            let better = vcltq_u32(m0123, *min_val);
-            *min_offset = vbslq_u32(better, vdupq_n_u32(*offset as u32), *min_offset);
-            *min_val = vminq_u32(m0123, *min_val);
+            let better = vcltq_u32(m0123, min_val);
+            min_offset = vbslq_u32(better, vdupq_n_u32(*offset as u32), min_offset);
+            min_val = vminq_u32(m0123, min_val);
             *offset += 16;
         };
 
         while offset + 32 + 4 <= bytes.len() {
-            // Manually unrolled twice, into independent accumulators.
-            body(&mut offset, &mut min_val, &mut min_offset);
-            body(&mut offset, &mut min_val_b, &mut min_offset_b);
+            // Manually unrolled twice.
+            body(&mut offset);
+            body(&mut offset);
         }
         while offset + 4 <= bytes.len() {
             if offset + 16 + 3 > bytes.len() {
                 offset = bytes.len() - 16 - 3;
             }
-            body(&mut offset, &mut min_val, &mut min_offset);
+            body(&mut offset);
         }
 
-        // Both accumulators hold absolute offsets, so reducing over all eight
-        // (value, offset) lanes is order-correct (ties break to the earliest).
-        let mut min_val_scalar = [0u32; 8];
-        let mut min_offset_scalar = [0u32; 8];
+        let mut min_val_scalar = [0u32; 4];
+        let mut min_offset_scalar = [0u32; 4];
         vst1q_u32(min_val_scalar.as_mut_ptr(), min_val);
-        vst1q_u32(min_val_scalar.as_mut_ptr().add(4), min_val_b);
         vst1q_u32(min_offset_scalar.as_mut_ptr(), min_offset);
-        vst1q_u32(min_offset_scalar.as_mut_ptr().add(4), min_offset_b);
 
-        let min_reg = (0..8)
+        let min_reg = (0..4)
             .map(|i| {
-                ((min_val_scalar[i] as u64) << 32)
-                    | (min_offset_scalar[i] as u64 + 4 * (i % 4) as u64)
+                ((min_val_scalar[i] as u64) << 32) | (min_offset_scalar[i] as u64 + 4 * i as u64)
             })
             .min()
             .unwrap();
