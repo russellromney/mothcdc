@@ -70,8 +70,8 @@ Throughput, GiB/s:
 | AE-Min / FastCDC / RAM | 1.4 / 1.8 / 1.5 | 1.4 / 2.0 / 1.4 | 1.4 / 1.9 / 1.6 | 1.4 / 1.9 / 1.9 |
 | SeqCDC | 3.2 | 6.4 | 7.1 | 5.9 |
 | VectorCDC AE-Min (AVX2) | 14.0 | 5.4 | 7.9 | 8.5 |
-| MothCDC (wide) | 11.4 | 10.7 | 9.3 | 8.0 |
-| **MothCDC** | **16.2** | **15.2** | **14.0** | **13.1** |
+| MothCDC (wide) | 10.6 | 11.4 | 9.5 | 8.0 |
+| **MothCDC** | **16.6** | **15.5** | **14.1** | **13.4** |
 | VectorCDC RAM (AVX2) | 23.4 | 19.6 | 24.7 | 29.6 |
 
 Space savings (dedup-bench `measure-dedup`; same result on any machine):
